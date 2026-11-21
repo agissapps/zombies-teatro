@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v14 · zombies dorados';
+const VERSION = 'v15 · sticker ¡recarguen!';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -157,7 +157,7 @@ function newGame(list) {
     solo: list.length === 1, over: null,
     box: { loc: Math.floor(Math.random() * BOX_LOCS.length), st: 'idle', t: 0, gun: null, show: '', uses: 0, minUses: 4 + Math.floor(Math.random() * 4), owner: null },
     pap: { st: 'idle', t: 0, owner: null, gid: null },
-    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0, zid: 0, nextGold: 2 + Math.floor(Math.random() * 4), goldPending: false,
+    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0, zid: 0, stk: [], nextGold: 2 + Math.floor(Math.random() * 4), goldPending: false,
   };
   DOORS.forEach(d => { d.open = false; d.tiles.forEach(([x, y]) => setT(x, y, DOOR)); });
   WINDOWS.forEach(w => { w.boards = 6; });
@@ -197,6 +197,7 @@ function noise(d, freq, v) {
   s.connect(f).connect(g).connect(AC.destination); s.start(t); s.stop(t + d);
 }
 const SFX = {
+  sticker: () => { tone(880, .07, 'square', .05); tone(1175, .07, 'square', .05, 0, .08); tone(1568, .1, 'square', .05, 0, .16); },
   pistola: () => noise(.12, 1800, .35), escopeta: () => { noise(.3, 700, .5); }, subfusil: () => noise(.07, 2200, .25),
   rifle: () => noise(.1, 1400, .32), ametra: () => noise(.09, 1100, .32), empty: () => tone(900, .03, 'square', .03),
   reload: () => { tone(500, .05, 'square', .03); tone(700, .05, 'square', .03, 0, .15); }, knife: () => noise(.08, 4000, .2),
@@ -684,7 +685,7 @@ function readPad() {
     return {
       lx: dz(gp.axes[0] || 0), ly: dz(gp.axes[1] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0),
       fire: b(7), fireEdge: edge(7), act: b(0), actEdge: edge(0), reload: edge(2),
-      knife: edge(1) | edge(5), swap: edge(3), start: edge(9), map: edge(8),
+      knife: edge(1) | edge(5), swap: edge(3), start: edge(9), map: edge(8), stk: edge(4),
     };
   }
   return null;
@@ -741,6 +742,7 @@ function readInput(p) {
   }
   // mapa: M / Back. Con el mapa abierto, las teclas eligen ruta y no disparan ni compran
   const wasOpen = mapOpen;
+  if (pressed.KeyT || (pad && pad.stk)) sendSticker();
   if (pressed.KeyM || (pad && pad.map)) toggleMap();
   if (wasOpen && mapOpen) {
     if (pressed.KeyB || (pad && pad.actEdge)) setRoute('box');
@@ -913,6 +915,44 @@ function drawGuides(me) {
     ctx.restore();
   });
 }
+/* ============================ STICKERS ============================ */
+// Al ver una munición máxima en el piso aparece el botón ¡RECARGUEN!: avisa a todos que recarguen
+// antes de que alguien la tome (así se llenan cargador y reserva).
+let lastStk = 0;
+function ammoInView() {
+  if (!G || G.solo || phase !== 'play') return false;
+  return G.drops.some(d => d.k === 'ammo' && d.x > cam.x - 8 && d.x < cam.x + VW + 8 && d.y > cam.y - 8 && d.y < cam.y + VH + 8);
+}
+function addSticker(f, k) {      // solo en el anfitrión
+  if (k !== 'reload' || G.stk.some(s => s.f === f)) return;
+  G.stk.push({ f, k, l: 3.5 }); sfx('sticker');
+}
+function sendSticker() {
+  const now = performance.now(); if (now - lastStk < 1500 || !ammoInView()) return; lastStk = now;
+  if (isHost) addSticker(myIdx, 'reload'); else { send(hostConn, { t: 'stk', k: 'reload' }); play_('sticker'); }
+}
+function reloadIcon(x, y, R, c) {   // flechas en círculo
+  ctx.save(); ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, R, -.3, Math.PI * 1.55); ctx.stroke();
+  const ax = x + Math.cos(-.3) * R, ay = y + Math.sin(-.3) * R; ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(ax + 2.2, ay - .5); ctx.lineTo(ax - 1.8, ay - 1.5); ctx.lineTo(ax - .2, ay + 2.2); ctx.fill(); ctx.restore();
+}
+function drawStickers() {
+  const k = G.stk[G.stk.length - 1]; if (!k) return;
+  const p = G.players[k.f]; if (!p) return;
+  const pop = Math.min(1, (3.5 - k.l) * 6), w = 150, h = 30, X = VW / 2 - w / 2, Y = 20;
+  ctx.save(); ctx.globalAlpha = Math.min(1, k.l * 2);
+  ctx.translate(VW / 2, Y + h / 2); ctx.scale(pop, pop); ctx.translate(-VW / 2, -(Y + h / 2));
+  r(X - 2, Y - 2, w + 4, h + 4, '#000'); r(X, Y, w, h, '#ffc93c'); r(X + 2, Y + 2, w - 4, h - 4, '#24141c');
+  r(X + 6, Y + 5, 20, 20, '#ffc93c'); reloadIcon(X + 16, Y + 15, 6, '#24141c');
+  text(p.name.toUpperCase() + ':', X + 32, Y + 6, CHARS[p.ch].c, 6);
+  text('¡RECARGUEN!', X + 32, Y + 16, '#ffc93c', 8);
+  ctx.restore();
+}
+let stkShown = false;
+function syncStickerBtn() {
+  const show = ammoInView() && !mapOpen && G && G.players[myIdx] && !G.players[myIdx].dead;
+  if (show !== stkShown) { stkShown = show; const b = document.getElementById('bStk'); if (b) b.classList.toggle('hidden', !show); }
+}
+
 /* ============================ MAPA Y RUTAS ============================ */
 // Cada jugador abre su propio mapa y elige una ruta (al baúl, a la poción más cercana o a la máquina dorada).
 // La ruta se calcula una vez y se dibuja como línea azul en el piso; desaparece al llegar.
@@ -1064,6 +1104,7 @@ function render() {
       if (!e.down) drawGunInHand(e, X, Y - 1 - bob);
       text(e.name, X, Y - 17, CHARS[e.ch].c, 6, 'center');
       if (ghost) text('RECONECTANDO…', X, Y - 25, '#8fd0ff', 6, 'center');
+      if (G.stk.some(k => k.f === e.idx)) { r(X - 7, Y - 36, 14, 12, '#000'); r(X - 6, Y - 35, 12, 10, '#f4e6d0'); r(X - 1, Y - 25, 3, 2, '#f4e6d0'); reloadIcon(X, Y - 30, 3, '#d8283a'); }
       if (e.down) {   // barra: verde = lo están reviviendo, roja = tiempo antes de desangrarse
         r(X - 9, Y - 23, 18, 3, '#000');
         if (e.revT > 0) r(X - 8, Y - 22, Math.round(16 * Math.min(1, e.revT / 3)), 1, '#4caf3a');
@@ -1103,6 +1144,8 @@ function render() {
     r(ex - 3, ey - 3, 6, 6, '#000'); r(ex - 2, ey - 2, 4, 4, Math.floor(performance.now() / 300) % 2 ? '#ff4040' : '#ffc93c');
   }
   drawHUD(me);
+  syncStickerBtn();
+  drawStickers();
   if (performance.now() < routeMsgUntil && !mapOpen) routeMsgText.split(' · ').forEach((l, i) => text(l, VW / 2, 28 + i * 9, '#5bd8ff', 6, 'center'));
   if (mapOpen) drawMap(me);
 }
@@ -1180,6 +1223,7 @@ function update(dt) {
   if (!G.players.some(p => alive(p) || (p.away && !p.dead))) gameOver();
 }
 function commonTimers(dt) {
+  for (const k of G.stk) k.l -= dt; G.stk = G.stk.filter(k => k.l > 0);
   G.msgT -= dt;
   if (G.banner > 0) G.banner = Math.max(0, G.banner - dt); else if (G.banner < 0) G.banner = Math.min(0, G.banner + dt);
   for (const f of G.fx) { f.l -= dt; if (!f.k) { f.x += f.vx * dt; f.y += f.vy * dt; } }
@@ -1339,6 +1383,7 @@ function hostOnData(c, m) {
     const o = RIN[i] || {};
     RIN[i] = Object.assign(m, { at: performance.now(), fp: o.fp || m.fp, ap: o.ap || m.ap, rl: o.rl || m.rl, kn: o.kn || m.kn, sw: o.sw || m.sw });
   } else if (m.t === 'ping') send(c, { t: 'pong', t0: m.t0 });
+  else if (m.t === 'stk' && G && phase === 'play') addSticker(i, m.k);
 }
 function hostOnClose(c) {
   const i = room.findIndex(r => r.conn === c); if (i <= 0) return;
@@ -1374,6 +1419,7 @@ function buildSnap() {
       name: p.name, ch: p.ch, tp: p.tp, away: !!p.away, hurtT: r1(Math.min(p.hurtT, 9)), invT: r1(p.invT),
     })),
     // efectos con números redondeados (fotos más ligeras = menos retraso)
+    stk: G.stk.map(k => ({ f: k.f, k: k.k, l: r1(k.l) })),
     ev: {
       fx: evQ.fx.map(f => { const o = {}; for (const k in f) o[k] = typeof f[k] === 'number' ? Math.round(f[k] * 100) / 100 : f[k]; return o; }),
       tr: evQ.tr.map(t => ({ x1: Math.round(t.x1), y1: Math.round(t.y1), x2: Math.round(t.x2), y2: Math.round(t.y2), l: t.l, c: t.c })),
@@ -1422,7 +1468,7 @@ function applySnap(s) {
   s.wb.forEach((b, i) => { WINDOWS[i].boards = b; });
   Object.assign(G.box, s.bx); G.pap = s.pp;
   G.drops = s.dp.map(([x, y, k, l]) => ({ x, y, k, l }));
-  G.x2T = s.x2; G.killT = s.kl; G.msg = s.msg; G.msgT = s.mt;
+  G.x2T = s.x2; G.killT = s.kl; G.msg = s.msg; G.msgT = s.mt; if (s.stk) G.stk = s.stk;
   const byId = new Map(G.zombies.map(z => [z.id, z]));
   G.zombies = s.z.map(([id, x, y, face, fl, gd]) => {
     let z = byId.get(id);
@@ -1514,7 +1560,7 @@ function frame() { render(); requestAnimationFrame(frame); }
 
 /* ============================ UI ============================ */
 const $ = id => document.getElementById(id);
-function show(id) { ['menu', 'help', 'over', 'lobby'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('bMap').classList.toggle('hidden', phase !== 'play'); if (phase !== 'play') closeMap(); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
+function show(id) { ['menu', 'help', 'over', 'lobby'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('bMap').classList.toggle('hidden', phase !== 'play'); if (phase !== 'play') { stkShown = false; $('bStk').classList.add('hidden'); } if (phase !== 'play') closeMap(); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
 CHARS.forEach((c, i) => {
   const b = document.createElement('button'); b.className = 'char' + (i === myChar ? ' sel' : '');
   const cvs = document.createElement('canvas'); cvs.width = 12; cvs.height = 14; cvs.getContext('2d').drawImage(SP['p' + i], 0, 0);
@@ -1540,6 +1586,7 @@ $('bCreate').onclick = createRoom; $('bJoin').onclick = joinRoom;
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
 $('bStart').onclick = hostStart;
 $('bMap').onclick = () => { ensureAudio(); toggleMap(); };
+$('bStk').addEventListener('pointerdown', e => { e.preventDefault(); ensureAudio(); sendSticker(); });
 $('rBox').onclick = () => setRoute('box'); $('rPot').onclick = () => setRoute('potion'); $('rPap').onclick = () => setRoute('pap');
 $('rOff').onclick = () => { ROUTE = null; closeMap(); }; $('rClose').onclick = closeMap;
 $('bLeave').onclick = () => leaveNet(false);

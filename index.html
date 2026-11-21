@@ -64,6 +64,8 @@
   .pl small{font-size:7px;color:#a88}
   .pl.empty{color:#5a4048}
   #bMap{position:fixed;top:6px;right:46px;z-index:20;font-size:9px;padding:6px 8px;margin:0;width:auto;background:#24387a;box-shadow:2px 2px 0 #000}
+  #bStk{position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:20;font-size:10px;padding:8px 12px;margin:0;width:auto;background:#ffc93c;color:#24141c;box-shadow:inset -3px -3px 0 #c8961e,3px 3px 0 #000;animation:stkp .6s ease-in-out infinite alternate}
+  @keyframes stkp{to{transform:translateX(-50%) scale(1.08)}}
   #mapUI{position:fixed;right:max(10px,env(safe-area-inset-right));top:50%;transform:translateY(-50%);z-index:15;display:flex;flex-direction:column;gap:4px;width:min(170px,22vw);min-width:120px}
   #mapUI button{font-size:8px;padding:9px 6px;margin:0}
   #ver{position:fixed;left:50%;transform:translateX(-50%);bottom:max(3px,env(safe-area-inset-bottom));z-index:20;font-size:7px;color:var(--yel);opacity:.6;pointer-events:none}
@@ -80,6 +82,7 @@
   <div id="tSwap" class="tb">CAM<br>BIAR</div>
 </div>
 <button id="fs" title="Pantalla completa">⛶</button>
+<button id="bStk" class="hidden" title="Avisar que recarguen (T)">📣 ¡RECARGUEN!</button>
 <button id="bMap" class="hidden" title="Mapa (M)">🗺 MAPA</button>
 <div id="mapUI" class="hidden">
   <button id="rBox">🎁 Ruta al baúl</button>
@@ -126,6 +129,7 @@
       <b>Pociones:</b> Soda Coraza (más vida) · Palomitas Turbo (recarga) · Jugo Ángel (solo: te levanta una vez · en equipo: revives el doble de rápido) · Paleta Veloz (corres más).<br>
       <b>En equipo:</b> si caes tienes 30 s; un compañero te revive manteniendo ACCIÓN junto a ti. Si te desangras, vuelves la siguiente ronda con pistola.<br>
       <b>Máquina dorada</b> (5000, sótano): mejora tu arma: doble daño, más balas y balas violetas.<br>
+      <b>Munición máxima a la vista:</b> toca 📣 ¡RECARGUEN! (T / LB) para avisar a todos que recarguen antes de tomarla.<br>
       <b>Mapa</b> (botón 🗺, tecla M o Back en el control): traza una ruta al baúl, a la poción más cercana o a la máquina.<br>
       Los zombies a veces sueltan <b>premios</b>: munición máxima, doble puntos, golpe mortal, bomba y carpintero (repara todas las ventanas).<br>
       <b>Zombie dorado:</b> sale cada 2 a 5 rondas, aguanta más y siempre suelta un premio.<br><br>
@@ -161,6 +165,6 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="game.js?v=14"></script>
+<script src="game.js?v=15"></script>
 </body>
 </html>
