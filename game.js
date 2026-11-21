@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v1 · fase 1';
+const VERSION = 'v2 · fase 1 + control';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -411,6 +411,12 @@ cv.addEventListener('wheel', e => { pressed.KeyQ = true; e.preventDefault(); }, 
 addEventListener('contextmenu', e => e.preventDefault());
 
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
+let usingPad = false;
+addEventListener('gamepadconnected', () => {
+  usingPad = true; padToast = 3;
+  if (phase === 'play') show(null);   // ocultar botones táctiles si conectan un control
+});
+let padToast = 0;
 function joystick(el, onMove) {
   const k = el.querySelector('.k'); let id = null, cx = 0, cy = 0;
   const mv = e => {
@@ -434,23 +440,53 @@ joystick(document.getElementById('joyR'), (x, y) => { jR = [x, y]; usingMouse = 
 });
 
 let lastStickAim = 0;
+// ---- control (Xbox / PlayStation / genérico, mapeo estándar) ----
+// Palanca izq: mover · Palanca der: apuntar · RT/R2: disparar · A/✕: acción · X/□: recargar
+// B/○ o RB/R1: cuchillo · Y/△: cambiar arma · Start: jugar
+const GP_PREV = {};
+function readPad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const gp of pads) {
+    if (!gp || !gp.connected) continue;
+    const b = i => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > .4));
+    const edge = i => { const now = b(i), was = GP_PREV[i]; GP_PREV[i] = now; return now && !was; };
+    const dz = v => Math.abs(v) < .2 ? 0 : v;
+    return {
+      lx: dz(gp.axes[0] || 0), ly: dz(gp.axes[1] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0),
+      fire: b(7), fireEdge: edge(7), act: b(0), actEdge: edge(0), reload: edge(2),
+      knife: edge(1) | edge(5), swap: edge(3), start: edge(9),
+    };
+  }
+  return null;
+}
+function aimAssist(p, aim) {
+  let best = .3;
+  for (const z of G.zombies) {
+    const dx = z.x - p.x, dy = z.y - p.y, d = Math.hypot(dx, dy); if (d > 150) continue;
+    let da = Math.abs(Math.atan2(dy, dx) - aim); if (da > Math.PI) da = 2 * Math.PI - da;
+    if (da < best) { best = da; aim = Math.atan2(dy, dx); }
+  }
+  return aim;
+}
 function readInput(p) {
+  const pad = readPad();
+  if (pad) usingPad = true;
   let mx = 0, my = 0;
+  if (pad) { mx += pad.lx; my += pad.ly; }
   if (keys.KeyA || keys.ArrowLeft) mx--; if (keys.KeyD || keys.ArrowRight) mx++;
   if (keys.KeyW || keys.ArrowUp) my--; if (keys.KeyS || keys.ArrowDown) my++;
   mx += jL[0]; my += jL[1];
   const m = Math.hypot(mx, my); if (m > 1) { mx /= m; my /= m; } if (m < .2) { mx = my = 0; }
   let aim = p.aim, fire = false, firePressed = false;
   const rm = Math.hypot(jR[0], jR[1]);
-  if (rm > .25) {
-    aim = Math.atan2(jR[1], jR[0]);
-    // ayuda de puntería en el teléfono: si hay un zombie cerca de la dirección, apunta a él
-    let best = .3;
-    for (const z of G.zombies) {
-      const dx = z.x - p.x, dy = z.y - p.y, d = Math.hypot(dx, dy); if (d > 150) continue;
-      let da = Math.abs(Math.atan2(dy, dx) - aim); if (da > Math.PI) da = 2 * Math.PI - da;
-      if (da < best) { best = da; aim = Math.atan2(dy, dx); }
-    }
+  if (pad && (pad.rx || pad.ry || pad.fire)) {
+    // control: la palanca derecha apunta (con ayuda de puntería), el gatillo dispara
+    if (pad.rx || pad.ry) aim = aimAssist(p, Math.atan2(pad.ry, pad.rx));
+    else if (mx || my) aim = aimAssist(p, Math.atan2(my, mx));
+    fire = pad.fire; firePressed = pad.fireEdge; usingMouse = false;
+  } else if (rm > .25) {
+    // teléfono: ayuda de puntería si hay un zombie cerca de la dirección
+    aim = aimAssist(p, Math.atan2(jR[1], jR[0]));
     fire = rm > .55; firePressed = fire && !readInput.wasFire; readInput.wasFire = fire;
     lastStickAim = aim;
   } else {
@@ -465,9 +501,9 @@ function readInput(p) {
   }
   const inp = {
     mx, my, aim, fire, firePressed,
-    reload: pressed.KeyR || tpress.reload, knife: pressed.KeyF || pressed.KeyV || tpress.knife,
-    swap: pressed.KeyQ || pressed.Digit1 || pressed.Digit2 || tpress.swap,
-    act: keys.KeyE || tbtn.act, actPressed: pressed.KeyE || tpress.act,
+    reload: pressed.KeyR || tpress.reload || (pad && pad.reload), knife: pressed.KeyF || pressed.KeyV || tpress.knife || (pad && pad.knife),
+    swap: pressed.KeyQ || pressed.Digit1 || pressed.Digit2 || tpress.swap || (pad && pad.swap),
+    act: keys.KeyE || tbtn.act || (pad && pad.act), actPressed: pressed.KeyE || tpress.act || (pad && pad.actEdge),
   };
   for (const k in pressed) pressed[k] = false; for (const k in tpress) tpress[k] = false; mousePressed = false;
   return inp;
@@ -622,7 +658,7 @@ function drawHUD(p) {
   text(p.relT > 0 ? 'RECARGANDO' : `${g.ammo} / ${g.res}`, VW - 6, VH - 14, g.ammo === 0 ? '#ff6b6b' : '#f4e6d0', 8, 'right');
   const it = interactable(p);
   if (it) {
-    const t = (isTouch ? '' : 'E: ') + it.txt, can = it.cost === undefined || p.pts >= it.cost;
+    const t = (usingPad ? 'A: ' : isTouch ? '' : 'E: ') + it.txt, can = it.cost === undefined || p.pts >= it.cost;
     text(t, VW / 2, VH - 38, can ? '#f4e6d0' : '#ff8080', 6, 'center');
   }
   if (G.banner > 0) {
@@ -630,6 +666,7 @@ function drawHUD(p) {
   } else if (G.banner < 0) {
     ctx.globalAlpha = Math.min(1, -G.banner); text('¡SE HIZO LA LUZ!', VW / 2, 40, '#ffc93c', 10, 'center'); ctx.globalAlpha = 1;
   }
+  if (padToast > 0) text('Control conectado', VW / 2, 18, '#8fd0ff', 6, 'center');
   const room = roomAt[idx(Math.floor(p.x / TS), Math.floor(p.y / TS))];
   if (room >= 0) text(ROOMS[room].n, 6, 6, 'rgba(244,230,208,.7)', 6);
 }
@@ -661,13 +698,15 @@ function gameOver() {
 let last = performance.now();
 function loop(ts) {
   const dt = Math.min(.05, (ts - last) / 1000); last = ts;
+  if (phase !== 'play') { const pad = readPad(); if (pad && (pad.start || pad.actEdge) && (phase === 'menu' || phase === 'over')) play(); }
+  padToast -= dt;
   update(dt); render();
   requestAnimationFrame(loop);
 }
 
 /* ============================ UI ============================ */
 const $ = id => document.getElementById(id);
-function show(id) { ['menu', 'help', 'over'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('touch').classList.toggle('hidden', !(isTouch && phase === 'play')); resize(); }
+function show(id) { ['menu', 'help', 'over'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
 CHARS.forEach((c, i) => {
   const b = document.createElement('button'); b.className = 'char' + (i === myChar ? ' sel' : '');
   const cvs = document.createElement('canvas'); cvs.width = 12; cvs.height = 14; cvs.getContext('2d').drawImage(SP['p' + i], 0, 0);
