@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v12 · reconexión, arrancones y guía';
+const VERSION = 'v13 · mapa y rutas';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -94,7 +94,7 @@ const BOX_POOL = ['escopeta', 'subfusil', 'rifle', 'ametra', 'revolver', 'revolv
 function wstat(g) {      // estadísticas del arma (dobles si está mejorada)
   const W = WEAPONS[g.id];
   if (!g.up) return W;
-  return { ...W, n: W.n + ' dorada', dmg: W.dmg * 2, mag: Math.round(W.mag * 1.5), res: W.res * 2, explode: W.explode && W.explode * 1.3 };
+  return { ...W, n: W.n + ' mejorada', dmg: W.dmg * 2, mag: Math.round(W.mag * 1.5), res: W.res * 2, explode: W.explode && W.explode * 1.3 };
 }
 const BOX_LOCS = [[40, 35, 2], [8, 22, 4], [28, 46, 7]].map(([x, y, room]) => ({ x: (x + MX) * TS + 8, y: (y + MY) * TS + 8, room }));
 const PAP = { x: (8 + MX) * TS + 8, y: (46 + MY) * TS + 8, cost: 5000 };
@@ -146,6 +146,7 @@ function addFx(f) { G.fx.push(f); if (isHost && netOn && evQ.fx.length < 80) evQ
 function addTr(t) { G.tracers.push(t); if (isHost && netOn && evQ.tr.length < 60) evQ.tr.push(t); }
 function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn && evQ.bl.length < 40) evQ.bl.push(b); }
 function newGame(list) {
+  ROUTE = null; mapOpen = false; syncMapUI();
   for (const k in GUIDES) delete GUIDES[k];
   list = list || [{ name: myName(), ch: myChar }];
   G = {
@@ -436,7 +437,7 @@ function shoot(p) {
     // las balas atraviesan hasta 3 zombies (la escopeta hasta 4); el rayo de hielo, todos
     const pen = g.id === 'escopeta' ? 4 : 3, hits = W.pierce ? r.all : r.all.slice(0, pen);
     const end = W.explode ? r.t : W.pierce || hits.length < pen ? r.wallT : hits[pen - 1]._t;
-    addTr({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#ffd84a' : null });
+    addTr({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#c77dff' : null });
     if (W.explode) explode(ox + Math.cos(a) * r.t, oy + Math.sin(a) * r.t, W.explode, W.dmg, p);
     else hits.forEach(z => { hurtZombie(z, W.dmg, p, false); if (W.slow) z.slowT = 2.5; });
   }
@@ -497,8 +498,8 @@ function interactable(p) {
   if (dist2(p.x, p.y, PAP.x, PAP.y) < 22 * 22) {
     if (!G.power) return { k: 'none', txt: 'La máquina necesita luz' };
     const g = p.guns[p.cur];
-    if (G.pap.st === 'idle') return g.up ? { k: 'none', txt: 'Esta arma ya es dorada' } : { k: 'pap', txt: `Mejorar ${WEAPONS[g.id].n} [${PAP.cost}]`, cost: PAP.cost };
-    if (G.pap.st === 'ready' && G.pap.owner === p.idx) return { k: 'papTake', txt: 'Tomar arma dorada' };
+    if (G.pap.st === 'idle') return g.up ? { k: 'none', txt: 'Esta arma ya está mejorada' } : { k: 'pap', txt: `Mejorar ${WEAPONS[g.id].n} [${PAP.cost}]`, cost: PAP.cost };
+    if (G.pap.st === 'ready' && G.pap.owner === p.idx) return { k: 'papTake', txt: 'Tomar arma mejorada' };
   }
   // pociones
   for (const po of POTIONS) if (dist2(p.x, p.y, po.x, po.y) < 18 * 18) {
@@ -543,7 +544,7 @@ function action(p, pressed, dt) {
   } else if (it.k === 'papTake') {
     const g = p.guns.find(o => o.id === G.pap.gid);
     if (g) giveGun(p, gun(g.id, true)); else giveGun(p, gun(G.pap.gid, true));
-    G.pap = { st: 'idle', t: 0, owner: null, gid: null }; sfx('buy'); flash('¡ARMA DORADA!');
+    G.pap = { st: 'idle', t: 0, owner: null, gid: null }; sfx('buy'); flash('¡ARMA MEJORADA!');
   } else if (it.k === 'potion') {
     if (p.potions.length >= 4) { sfx('no'); return; }
     p.pts -= it.cost; p.potions.push(it.po.id); sfx('drink'); flash(it.po.n.toUpperCase() + ': ' + it.po.d);
@@ -674,7 +675,7 @@ function readPad() {
     return {
       lx: dz(gp.axes[0] || 0), ly: dz(gp.axes[1] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0),
       fire: b(7), fireEdge: edge(7), act: b(0), actEdge: edge(0), reload: edge(2),
-      knife: edge(1) | edge(5), swap: edge(3), start: edge(9),
+      knife: edge(1) | edge(5), swap: edge(3), start: edge(9), map: edge(8),
     };
   }
   return null;
@@ -728,6 +729,19 @@ function readInput(p) {
     else if (performance.now() - lastStickT < 1500) aim = lastStickAim;
     else if (mx || my) aim = Math.atan2(my, mx);
     if (keys.Space) { fire = true; firePressed = firePressed || pressed.Space; }
+  }
+  // mapa: M / Back. Con el mapa abierto, las teclas eligen ruta y no disparan ni compran
+  const wasOpen = mapOpen;
+  if (pressed.KeyM || (pad && pad.map)) toggleMap();
+  if (wasOpen && mapOpen) {
+    if (pressed.KeyB || (pad && pad.actEdge)) setRoute('box');
+    else if (pressed.KeyP || (pad && pad.reload)) setRoute('potion');
+    else if (pressed.KeyG || (pad && pad.swap)) setRoute('pap');
+    else if (pressed.Escape || (pad && pad.knife)) closeMap();
+  }
+  if (wasOpen) {
+    for (const k in pressed) pressed[k] = false; for (const k in tpress) tpress[k] = false; mousePressed = false;
+    return { mx, my, aim, fire: false, firePressed: false };
   }
   const inp = {
     mx, my, aim, fire, firePressed,
@@ -802,7 +816,7 @@ function drawWallBuy(wb) {
 function drawGunInHand(p, X, Y) {
   const cs = Math.cos(p.aim), sn = Math.sin(p.aim), len = p.guns[p.cur].id === 'pistola' ? 5 : 8;
   const g = p.guns[p.cur];
-  ctx.strokeStyle = g.up ? '#ffd84a' : g.id === 'hielo' ? '#8fe8ff' : g.id === 'confeti' ? '#ff7eb6' : '#1a1a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X + cs * len, Y + sn * len); ctx.stroke();
+  ctx.strokeStyle = g.up ? '#c77dff' : g.id === 'hielo' ? '#8fe8ff' : g.id === 'confeti' ? '#ff7eb6' : '#1a1a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X + cs * len, Y + sn * len); ctx.stroke();
   if (p.flash > 0) r(Math.round(X + cs * (len + 2)) - 1, Math.round(Y + sn * (len + 2)) - 1, 3, 3, '#ffe08a');
   if (p.knifeAnim > 0) r(Math.round(X + cs * 10) - 1, Math.round(Y + sn * 10) - 1, 3, 3, '#e0e6f0');
 }
@@ -890,6 +904,100 @@ function drawGuides(me) {
     ctx.restore();
   });
 }
+/* ============================ MAPA Y RUTAS ============================ */
+// Cada jugador abre su propio mapa y elige una ruta (al baúl, a la poción más cercana o a la máquina dorada).
+// La ruta se calcula una vez y se dibuja como línea azul en el piso; desaparece al llegar.
+let mapOpen = false, ROUTE = null, routeMsgText = '', routeMsgUntil = 0;
+function routeMsg(t) { routeMsgText = t; routeMsgUntil = performance.now() + 4500; }
+function bfsFrom(sx, sy) {        // camino por el piso; las puertas cerradas cuentan (para decirte cuál abrir)
+  const prev = new Int32Array(MW * MH).fill(-1), s = idx(Math.floor(sx / TS), Math.floor(sy / TS)), q = [s]; prev[s] = s;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h], cx = c % MW, cy = (c / MW) | 0;
+    for (const [dx, dy] of N4) {
+      const nx = cx + dx, ny = cy + dy, j = idx(nx, ny);
+      if (!inb(nx, ny) || prev[j] >= 0 || (tiles[j] !== FLOOR && tiles[j] !== DOOR)) continue;
+      prev[j] = c; q.push(j);
+    }
+  }
+  return { prev, s };
+}
+function pathLen(B, j) { let n = 0; for (let c = j; c !== B.s; c = B.prev[c]) n++; return n; }
+function setRoute(kind) {
+  const me = G && G.players[myIdx]; if (!me || !alive(me)) return;
+  let targets = [];
+  if (kind === 'box') {
+    if (G.box.st === 'gone') { routeMsg('El baúl se está mudando… prueba en unos segundos'); return; }
+    const L = BOX_LOCS[G.box.loc]; targets = [{ x: L.x, y: L.y, n: 'Baúl misterioso' }];
+  } else if (kind === 'potion') {
+    targets = POTIONS.filter(po => !hasPot(me, po.id)).map(po => ({ x: po.x, y: po.y, n: po.n + ' [' + po.cost + ']', luz: true }));
+    if (!targets.length) { routeMsg('Ya tienes todas las pociones'); return; }
+  } else if (kind === 'pap') targets = [{ x: PAP.x, y: PAP.y, n: 'Máquina dorada [5000]', luz: true }];
+  const B = bfsFrom(me.x, me.y);
+  let best = null, bd = 1e9, bj = -1;
+  for (const t of targets) {      // casilla de piso alcanzable junto al objetivo
+    const cx = Math.floor(t.x / TS), cy = Math.floor(t.y / TS);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const j = idx(cx + dx, cy + dy); if (B.prev[j] < 0) continue;
+      const d = pathLen(B, j); if (d < bd) { bd = d; best = t; bj = j; }
+    }
+  }
+  if (!best) { best = targets[0]; ROUTE = { pts: [[me.x, me.y], [best.x, best.y]], x: best.x, y: best.y }; routeMsg('Ruta: ' + best.n); closeMap(); return; }
+  const cells = []; for (let c = bj; ; c = B.prev[c]) { cells.push(c); if (c === B.s) break; }
+  cells.reverse();
+  const doors = [...new Set(cells.filter(c => tiles[c] === DOOR).map(c => doorAt[c]))].map(id => DOORS[id].cost);
+  let pts = cells.map(c => [(c % MW) * TS + 8, ((c / MW) | 0) * TS + 8]);
+  pts[0] = [me.x, me.y]; pts.push([best.x, best.y]);
+  pts = pts.filter((p, i) => i === 0 || i === pts.length - 1 || (pts[i - 1][0] - p[0]) * (pts[i + 1][1] - p[1]) !== (pts[i - 1][1] - p[1]) * (pts[i + 1][0] - p[0]));
+  ROUTE = { pts, x: best.x, y: best.y };
+  routeMsg('Ruta: ' + best.n + (doors.length ? ' · abre puerta ' + doors.join(' + ') : '') + (best.luz && !G.power ? ' · necesita la luz (azotea)' : ''));
+  closeMap();
+}
+function drawRoute(me) {
+  if (!ROUTE) return;
+  if (!alive(me) || Math.hypot(me.x - ROUTE.x, me.y - ROUTE.y) < 26) { if (alive(me)) routeMsg('¡Llegaste!'); ROUTE = null; return; }
+  const path = () => { ctx.beginPath(); ROUTE.pts.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); };
+  ctx.save(); ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 4; ctx.globalAlpha = .35; path(); ctx.stroke();
+  ctx.globalAlpha = .85; ctx.strokeStyle = '#5bd8ff'; ctx.lineWidth = 2; ctx.setLineDash([2, 5]); ctx.lineDashOffset = -performance.now() / 50; path(); ctx.stroke();
+  ctx.restore();
+  const t = ROUTE, b = Math.floor(performance.now() / 300) % 2;     // marca en el destino
+  r(t.x - 4, t.y - 14 - b, 8, 2, '#5bd8ff'); r(t.x - 1, t.y - 12 - b, 2, 3, '#5bd8ff');
+}
+const MAPFL = { carpet: '#7a2030', checker: '#8a8070', carpetDark: '#4d1822', wood: '#8a5a32', asphalt: '#4a4a52', purple: '#4e3060', gravel: '#6a6470', concrete: '#5a5a50' };
+function drawMap(me) {
+  r(0, 0, VW, VH, 'rgba(8,4,8,.88)');
+  const k = (VH - 14) / (MH * TS), ox = 60, oy = 7, s = TS * k;
+  const P = (x, y) => [ox + x * k, oy + y * k];
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const t = T(x, y); let c = null;
+    if (t === FLOOR) { const rm = roomAt[idx(x, y)]; c = rm >= 0 ? MAPFL[ROOMS[rm].fl] : '#5a4030'; ctx.globalAlpha = rm >= 0 && !G.roomOpen[rm] ? .35 : 1; }
+    else if (t === SEAT) { c = '#2a0c12'; ctx.globalAlpha = G.roomOpen[2] ? 1 : .35; }
+    else if (t === DOOR) { c = '#ffc93c'; ctx.globalAlpha = 1; }
+    else if (t === WIN) { c = '#b07a46'; ctx.globalAlpha = 1; }
+    if (c) { ctx.fillStyle = c; ctx.fillRect(ox + x * s, oy + y * s, s + .3, s + .3); }
+  }
+  ctx.globalAlpha = 1;
+  const dot = (x, y, c, n = 3) => { const [X, Y] = P(x, y); r(Math.round(X - n / 2), Math.round(Y - n / 2), n, n, c); };
+  const blink = Math.floor(performance.now() / 300) % 2;
+  if (G.box.st !== 'gone') { const L = BOX_LOCS[G.box.loc]; dot(L.x, L.y, '#000', 6); dot(L.x, L.y, '#b78cff', 4); }
+  POTIONS.forEach(po => { dot(po.x, po.y, '#000', 5); dot(po.x, po.y, po.c, 3); });
+  dot(PAP.x, PAP.y, '#000', 6); dot(PAP.x, PAP.y, '#ffd84a', 4);
+  if (!G.power) dot(SWITCH.x, SWITCH.y, blink ? '#4caf3a' : '#1a1418', 4);
+  TRAPS.forEach(tr => dot(tr.x, tr.y, '#8a5a32', 3));
+  if (ROUTE) { ctx.save(); ctx.strokeStyle = '#5bd8ff'; ctx.lineWidth = 1; ctx.beginPath(); ROUTE.pts.forEach(([x, y], i) => { const [X, Y] = P(x, y); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.stroke(); ctx.restore(); }
+  G.players.forEach(o => { if (o.dead) return; dot(o.x, o.y, '#000', 5); dot(o.x, o.y, o.down ? '#ff4040' : CHARS[o.ch].c, 3); });
+  if (blink) dot(me.x, me.y, '#fff', 5), dot(me.x, me.y, CHARS[me.ch].c, 3);
+  // leyenda
+  const lx = 4; let ly = 8;
+  text('MAPA', lx, ly, '#d8283a', 8); ly += 14;
+  [['Tú', CHARS[me.ch].c], ['Baúl', '#b78cff'], ['Pociones', '#e8443a'], ['Máquina', '#ffd84a'], ['Puerta', '#ffc93c'], ['Luz', '#4caf3a']].forEach(([n, c]) => { r(lx, ly + 1, 4, 4, c); text(n, lx + 7, ly, '#f4e6d0', 6); ly += 9; });
+  if (!isTouch) (usingPad ? ['A baúl', 'X poción', 'Y máquina'] : ['B baúl', 'P poción', 'G máquina']).forEach((t, i) => text(t, lx, VH - 32 + i * 9, '#a88', 6));
+}
+function openMap() { if (phase !== 'play' || !G) return; mapOpen = true; syncMapUI(); }
+function closeMap() { mapOpen = false; syncMapUI(); }
+function toggleMap() { mapOpen ? closeMap() : openMap(); }
+function syncMapUI() { const el = document.getElementById('mapUI'); if (el) el.classList.toggle('hidden', !mapOpen); }
+
 function render() {
   ctx.setTransform(S, 0, 0, S, 0, 0); ctx.imageSmoothingEnabled = false;
   r(0, 0, VW, VH, '#0b0810');
@@ -956,7 +1064,7 @@ function render() {
   }
   // trazos de bala y partículas
   ctx.lineWidth = 1;
-  for (const t of G.tracers) { ctx.strokeStyle = t.c || 'rgba(255,224,138,.8)'; ctx.lineWidth = t.c === '#8fe8ff' ? 2 : 1; ctx.beginPath(); ctx.moveTo(t.x1, t.y1); ctx.lineTo(t.x2, t.y2); ctx.stroke(); }
+  for (const t of G.tracers) { ctx.strokeStyle = t.c || 'rgba(255,224,138,.8)'; ctx.lineWidth = t.c === '#8fe8ff' || t.c === '#c77dff' ? 2 : 1; ctx.beginPath(); ctx.moveTo(t.x1, t.y1); ctx.lineTo(t.x2, t.y2); ctx.stroke(); }
   ctx.lineWidth = 1;
   for (const f of G.fx) {
     if (!f.k) r(Math.round(f.x), Math.round(f.y), 2, 2, f.c);
@@ -974,7 +1082,7 @@ function render() {
     dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, R, 0, Math.PI * 2); dctx.fill();
   }
   ctx.drawImage(dark, 0, 0);
-  ctx.save(); ctx.translate(-cam.x, -cam.y); drawGuides(me); ctx.restore();   // la línea guía va encima de la oscuridad
+  ctx.save(); ctx.translate(-cam.x, -cam.y); drawGuides(me); drawRoute(me); ctx.restore();   // la línea guía va encima de la oscuridad
   // compañeros caídos fuera de la pantalla: flecha roja en el borde
   for (const o of G.players) if (o !== me && o.down && !o.dead && !o.left) {
     const sx = o.x - cam.x, sy = o.y - cam.y;
@@ -983,6 +1091,8 @@ function render() {
     r(ex - 3, ey - 3, 6, 6, '#000'); r(ex - 2, ey - 2, 4, 4, Math.floor(performance.now() / 300) % 2 ? '#ff4040' : '#ffc93c');
   }
   drawHUD(me);
+  if (performance.now() < routeMsgUntil && !mapOpen) routeMsgText.split(' · ').forEach((l, i) => text(l, VW / 2, 28 + i * 9, '#5bd8ff', 6, 'center'));
+  if (mapOpen) drawMap(me);
 }
 function drawHUD(p) {
   const wf = G.fx.find(f => f.k === 'white'); if (wf) { ctx.globalAlpha = wf.l / .5; r(0, 0, VW, VH, '#fff'); ctx.globalAlpha = 1; }
@@ -997,7 +1107,7 @@ function drawHUD(p) {
   text(String(G.round || 0), 6, VH - 22, '#d8283a', 16);
   text(String(p.pts), VW - 6, 6, '#ffc93c', 8, 'right');
   const g = p.guns[p.cur], W = wstat(g);
-  text(W.n, VW - 6, VH - 24, g.up ? '#ffd84a' : '#f4e6d0', 6, 'right');
+  text(W.n, VW - 6, VH - 24, g.up ? '#c77dff' : '#f4e6d0', 6, 'right');
   text(p.relT > 0 ? 'RECARGANDO' : `${g.ammo} / ${g.res}`, VW - 6, VH - 14, g.ammo === 0 ? '#ff6b6b' : '#f4e6d0', 8, 'right');
   const it = interactable(p);
   if (it) {
@@ -1388,7 +1498,7 @@ function frame() { render(); requestAnimationFrame(frame); }
 
 /* ============================ UI ============================ */
 const $ = id => document.getElementById(id);
-function show(id) { ['menu', 'help', 'over', 'lobby'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
+function show(id) { ['menu', 'help', 'over', 'lobby'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('bMap').classList.toggle('hidden', phase !== 'play'); if (phase !== 'play') closeMap(); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
 CHARS.forEach((c, i) => {
   const b = document.createElement('button'); b.className = 'char' + (i === myChar ? ' sel' : '');
   const cvs = document.createElement('canvas'); cvs.width = 12; cvs.height = 14; cvs.getContext('2d').drawImage(SP['p' + i], 0, 0);
@@ -1413,6 +1523,9 @@ $('bPlay').onclick = play; $('bRetry').onclick = retry;
 $('bCreate').onclick = createRoom; $('bJoin').onclick = joinRoom;
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
 $('bStart').onclick = hostStart;
+$('bMap').onclick = () => { ensureAudio(); toggleMap(); };
+$('rBox').onclick = () => setRoute('box'); $('rPot').onclick = () => setRoute('potion'); $('rPap').onclick = () => setRoute('pap');
+$('rOff').onclick = () => { ROUTE = null; closeMap(); }; $('rClose').onclick = closeMap;
 $('bLeave').onclick = () => leaveNet(false);
 $('bMenu').onclick = () => { if (netOn) leaveNet(false); else { phase = 'menu'; G = null; show('menu'); } };
 $('bShare').onclick = async () => {

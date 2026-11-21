@@ -63,6 +63,9 @@
   .pl{font-size:9px;padding:7px 8px;background:#160c12;margin:4px 0;box-shadow:2px 2px 0 #000}
   .pl small{font-size:7px;color:#a88}
   .pl.empty{color:#5a4048}
+  #bMap{position:fixed;top:6px;right:46px;z-index:20;font-size:9px;padding:6px 8px;margin:0;width:auto;background:#24387a;box-shadow:2px 2px 0 #000}
+  #mapUI{position:fixed;right:max(10px,env(safe-area-inset-right));top:50%;transform:translateY(-50%);z-index:15;display:flex;flex-direction:column;gap:4px;width:min(170px,22vw);min-width:120px}
+  #mapUI button{font-size:8px;padding:9px 6px;margin:0}
   #ver{position:fixed;left:50%;transform:translateX(-50%);bottom:max(3px,env(safe-area-inset-bottom));z-index:20;font-size:7px;color:var(--yel);opacity:.6;pointer-events:none}
 </style>
 </head>
@@ -77,6 +80,14 @@
   <div id="tSwap" class="tb">CAM<br>BIAR</div>
 </div>
 <button id="fs" title="Pantalla completa">⛶</button>
+<button id="bMap" class="hidden" title="Mapa (M)">🗺 MAPA</button>
+<div id="mapUI" class="hidden">
+  <button id="rBox">🎁 Ruta al baúl</button>
+  <button id="rPot">🧃 Poción más cercana</button>
+  <button id="rPap">✨ Máquina de mejora</button>
+  <button id="rOff" class="small">Quitar ruta</button>
+  <button id="rClose" class="small">Cerrar mapa</button>
+</div>
 <div id="ver"></div>
 
 <div id="menu" class="ov">
@@ -114,7 +125,8 @@
       <b>Baúl misterioso</b> (950): arma al azar. Si sale la paloma, se muda de sala.<br>
       <b>Pociones:</b> Soda Coraza (más vida) · Palomitas Turbo (recarga) · Jugo Ángel (solo: te levanta una vez · en equipo: revives el doble de rápido) · Paleta Veloz (corres más).<br>
       <b>En equipo:</b> si caes tienes 30 s; un compañero te revive manteniendo ACCIÓN junto a ti. Si te desangras, vuelves la siguiente ronda con pistola.<br>
-      <b>Máquina dorada</b> (5000, sótano): mejora tu arma.<br>
+      <b>Máquina dorada</b> (5000, sótano): mejora tu arma: doble daño, más balas y balas violetas.<br>
+      <b>Mapa</b> (botón 🗺, tecla M o Back en el control): traza una ruta al baúl, a la poción más cercana o a la máquina.<br>
       Los zombies a veces sueltan <b>premios</b>: munición máxima, doble puntos, golpe mortal y bomba.<br><br>
       <b>Laptop:</b> WASD mover · ratón apuntar · clic disparar · E acción · R recargar · F cuchillo · Q cambiar arma<br>
       <b>Teléfono:</b> palanca izquierda mover · palanca derecha apuntar y disparar (tócala sin arrastrar para disparar al zombie más cercano)<br>
@@ -148,6 +160,6 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="game.js?v=12"></script>
+<script src="game.js?v=13"></script>
 </body>
 </html>
