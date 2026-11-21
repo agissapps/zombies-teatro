@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v9 · balas que atraviesan';
+const VERSION = 'v10 · hordas que rodean';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -340,6 +340,21 @@ function updateZombies(dt) {
       }
     }
     if (z.lost > 4) { respawnNear(z); continue; }   // atascado sin camino: reaparece en otra ventana
+    // horda: si va en grupo (3+ cerca) y te ve, ~15% decide rodearte por la izquierda y ~15% por la derecha
+    if (z.role === undefined && vis && td < 220 * 220) {
+      let n = 0; for (const o of G.zombies) if (o !== z && o.st === 'in' && dist2(o.x, o.y, z.x, z.y) < 48 * 48) n++;
+      if (n >= 3) {
+        const q = Math.random(); z.role = q < .15 ? -1 : q < .3 ? 1 : 0;
+        // punto fijo a un costado del jugador (unos 70° hacia su lado), para llegarle por el flanco
+        if (z.role) z.fa = Math.atan2(z.y - tp.y, z.x - tp.x) + z.role * 1.25;
+      }
+    }
+    if (z.role && !z.flankDone) {
+      const fx = tp.x + Math.cos(z.fa) * 52, fy = tp.y + Math.sin(z.fa) * 52;
+      if (td < 40 * 40 || dist2(z.x, z.y, fx, fy) < 14 * 14) z.flankDone = true;      // ya llegó al costado: ataca directo
+      else if (!blocked(fx, fy, 4, zSolid) && walkable(z.x, z.y, fx, fy)) { gx = fx; gy = fy; }
+      else z.flankDone = true;                                                        // no hay por dónde: sigue normal
+    }
     const d = Math.hypot(gx - z.x, gy - z.y) || 1;
     z.slowT = (z.slowT || 0) - dt;
     const sp = (z.atk > .6 ? z.sp * .3 : z.sp) * (z.slowT > 0 ? .4 : 1);

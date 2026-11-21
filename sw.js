@@ -1,8 +1,8 @@
 // Guarda el juego en el dispositivo para que la app abra aunque no haya página o internet.
 // Archivos del juego: primero intenta la red (para recibir actualizaciones) y si no hay, usa la copia guardada.
 // Archivos de fuera (PeerJS, letra): usa la copia guardada y la renueva en segundo plano.
-const CACHE = 'medianoche-v9';
-const CORE = ['./', './index.html', './game.js?v=9', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
+const CACHE = 'medianoche-v10';
+const CORE = ['./', './index.html', './game.js?v=10', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 const EXTRA = ['https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js'];
 
 self.addEventListener('install', e => {
@@ -14,14 +14,17 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
+const fromCache = req => caches.match(req, { ignoreSearch: req.mode === 'navigate' }).then(r => r || (req.mode === 'navigate' ? caches.match('./') : undefined));
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === location.origin) {
     e.respondWith(
-      fetch(req).then(r => { if (r.ok) { const cp = r.clone(); caches.open(CACHE).then(c => c.put(req, cp)); } return r; })
-        .catch(() => caches.match(req, { ignoreSearch: req.mode === 'navigate' }).then(r => r || caches.match('./')))
+      fetch(req).then(r => {
+        if (r.ok) { const cp = r.clone(); caches.open(CACHE).then(c => c.put(req, cp)); return r; }
+        return fromCache(req).then(c => c || r);          // la página ya no existe (404): usar la copia guardada
+      }).catch(() => fromCache(req))
     );
   } else if (/unpkg\.com|fonts\.(googleapis|gstatic)\.com/.test(url.host)) {
     e.respondWith(caches.open(CACHE).then(async c => {
