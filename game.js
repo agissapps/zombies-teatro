@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v2 · fase 1 + control';
+const VERSION = 'v3 · fase 2';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -85,7 +85,26 @@ const WEAPONS = {
   subfusil: { n: 'Subfusil', dmg: 30, rate: .085, mag: 30, res: 180, rel: 1.8, spread: .07, range: 190, auto: true, cost: 1200 },
   rifle: { n: 'Rifle', dmg: 60, rate: .13, mag: 30, res: 150, rel: 2, spread: .03, range: 240, auto: true, cost: 1400 },
   ametra: { n: 'Ametralladora', dmg: 55, rate: .075, mag: 75, res: 225, rel: 3.5, spread: .09, range: 220, auto: true, cost: 1800 },
+  // solo en el baúl misterioso
+  revolver: { n: 'Revólver', dmg: 140, rate: .35, mag: 6, res: 48, rel: 2, spread: .01, range: 240, auto: false, box: true },
+  confeti: { n: 'Lanza confeti', dmg: 400, rate: .6, mag: 4, res: 20, rel: 2.5, spread: .01, range: 200, auto: false, explode: 36, box: true },
+  hielo: { n: 'Rayo congelante', dmg: 90, rate: .3, mag: 12, res: 60, rel: 2, spread: 0, range: 230, auto: false, pierce: true, slow: true, box: true },
 };
+const BOX_POOL = ['escopeta', 'subfusil', 'rifle', 'ametra', 'revolver', 'revolver', 'confeti', 'hielo'];
+function wstat(g) {      // estadísticas del arma (dobles si está mejorada)
+  const W = WEAPONS[g.id];
+  if (!g.up) return W;
+  return { ...W, n: W.n + ' dorada', dmg: W.dmg * 2, mag: Math.round(W.mag * 1.5), res: W.res * 2, explode: W.explode && W.explode * 1.3 };
+}
+const BOX_LOCS = [[40, 35, 2], [8, 22, 4], [28, 46, 7]].map(([x, y, room]) => ({ x: (x + MX) * TS + 8, y: (y + MY) * TS + 8, room }));
+const PAP = { x: (8 + MX) * TS + 8, y: (46 + MY) * TS + 8, cost: 5000 };
+const POTIONS = [
+  { id: 'coraza', n: 'Soda Coraza', cost: 2500, x: 18, y: 22, c: '#e8443a', d: 'Aguantas más golpes' },
+  { id: 'turbo', n: 'Palomitas Turbo', cost: 2000, x: 30, y: 22, c: '#ffc93c', d: 'Recargas el doble de rápido' },
+  { id: 'angel', n: 'Jugo Ángel', cost: 1500, x: 12, y: 34, c: '#8fd0ff', d: 'Te levanta una vez si caes' },
+  { id: 'veloz', n: 'Paleta Veloz', cost: 2000, x: 18, y: 26, c: '#b78cff', d: 'Corres más rápido' },
+].map(p => ({ ...p, x: (p.x + MX) * TS + 8, y: (p.y + MY) * TS + 8 }));
+const DROPS = { ammo: { n: 'MUNICIÓN MÁXIMA', c: '#8fd0ff', l: 'M' }, x2: { n: 'DOBLE PUNTOS', c: '#ffc93c', l: '2' }, kill: { n: 'GOLPE MORTAL', c: '#ff4040', l: '!' }, bomb: { n: 'BOMBA', c: '#ff9a3c', l: 'B' } };
 // armas en la pared: [arma, celda, desplazamiento en la pared de arriba]
 const WALLBUYS = [['pistola', 2, 1, 7], ['escopeta', 1, 1, 8], ['subfusil', 2, 2, 12], ['rifle', 0, 1, 12], ['ametra', 0, 2, 3]]
   .map(([w, cx, cy, off]) => ({ w, tx: cx * CW + off + MX, ty: cy * CH + MY, x: (cx * CW + off + MX) * TS + 8, y: (cy * CH + MY) * TS + 8 }));
@@ -123,17 +142,24 @@ function newGame() {
     round: 0, state: 'break', breakT: 4, toSpawn: 0, spawnT: 0, power: false,
     roomOpen: ROOMS.map((_, i) => i === 0), zombies: [], fx: [], blood: [], tracers: [], banner: 0, flowT: 0,
     players: [newPlayer(myChar, myName())],
+    box: { loc: Math.floor(Math.random() * BOX_LOCS.length), st: 'idle', t: 0, gun: null, show: '', uses: 0, minUses: 4 + Math.floor(Math.random() * 4), owner: null },
+    pap: { st: 'idle', t: 0, owner: null, gid: null },
+    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0,
   };
   DOORS.forEach(d => { d.open = false; d.tiles.forEach(([x, y]) => setT(x, y, DOOR)); });
   WINDOWS.forEach(w => { w.boards = 6; });
 }
 function newPlayer(ch, name) {
   return {
-    ch, name: name || CHARS[ch].n, x: START.x, y: START.y, aim: 0, hp: 100, hurtT: 9, pts: 500, kills: 0, down: false,
+    ch, name: name || CHARS[ch].n, x: START.x, y: START.y, aim: 0, hp: 100, maxHp: 100, hurtT: 9, pts: 500, kills: 0, down: false,
+    potions: [], invT: 0,
     guns: [gun('pistola')], cur: 0, cool: 0, relT: 0, knifeT: 0, knifeAnim: 0, repT: 0, trapT: 0, flash: 0, mv: false, face: 1,
   };
 }
-function gun(id) { const w = WEAPONS[id]; return { id, ammo: w.mag, res: w.res }; }
+function gun(id, up) { const w = wstat({ id, up }); return { id, up: !!up, ammo: w.mag, res: w.res }; }
+const hasPot = (p, id) => p.potions.includes(id);
+function addPts(p, n) { p.pts += n * (G.x2T > 0 ? 2 : 1); }
+function flash(msg) { G.msg = msg; G.msgT = 2.5; }
 
 /* ============================ SONIDO ============================ */
 let AC = null, NOISE = null;
@@ -167,6 +193,13 @@ const SFX = {
   trap: () => tone(300, .3, 'sine', .08, 500), groan: () => tone(70 + Math.random() * 40, .5, 'sawtooth', .025, -20),
   round: () => { tone(98, .9, 'sawtooth', .07); tone(92, .9, 'sawtooth', .06, 0, .05); tone(73, 1.4, 'sawtooth', .07, 0, .9); },
   roundEnd: () => { tone(196, .5, 'triangle', .08); tone(262, .7, 'triangle', .08, 0, .4); },
+  revolver: () => noise(.18, 900, .45), confeti: () => { tone(400, .15, 'square', .05, 300); }, hielo: () => tone(1600, .25, 'sine', .07, -1200),
+  boom: () => { noise(.5, 250, .6); tone(60, .5, 'sine', .15, -30); },
+  box: () => { for (let i = 0; i < 12; i++) tone(523 + (i % 4) * 131, .12, 'triangle', .05, 0, i * .24); },
+  dove: () => { tone(1200, .1, 'sine', .06, 400); tone(1400, .1, 'sine', .06, 400, .15); tone(300, .6, 'sawtooth', .05, -150, .3); },
+  drink: () => { for (let i = 0; i < 4; i++) tone(300 + i * 60, .08, 'sine', .07, 0, i * .1); tone(900, .3, 'triangle', .06, 0, .5); },
+  pap: () => { for (let i = 0; i < 6; i++) tone(200 + i * 40, .3, 'sawtooth', .04, 0, i * .45); },
+  drop: () => { tone(784, .1, 'square', .05); tone(1047, .1, 'square', .05, 0, .1); tone(1568, .25, 'square', .05, 0, .2); },
 };
 const sfx = n => SFX[n] && SFX[n]();
 
@@ -198,7 +231,7 @@ function flowField() {
 const roundTotal = r => Math.round(4 + r * 3 + r * r * .3);
 const zombieHp = r => r < 10 ? 100 + 80 * (r - 1) : Math.round(820 * Math.pow(1.1, r - 9));
 function startRound() {
-  G.round++; G.toSpawn = roundTotal(G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
+  G.round++; G.dropsRound = 0; G.toSpawn = roundTotal(G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
 }
 function spawnZombie() {
   const open = WINDOWS.filter(w => G.roomOpen[w.room]);
@@ -255,12 +288,13 @@ function updateZombies(dt) {
     }
     if (z.lost > 5) { z.dead = true; G.toSpawn++; continue; }   // atascado sin camino: reaparece en otra ventana
     const d = Math.hypot(gx - z.x, gy - z.y) || 1;
-    const sp = z.atk > .6 ? z.sp * .3 : z.sp;
+    z.slowT = (z.slowT || 0) - dt;
+    const sp = (z.atk > .6 ? z.sp * .3 : z.sp) * (z.slowT > 0 ? .4 : 1);
     if (Math.sqrt(td) > 10) move(z, (gx - z.x) / d * sp, (gy - z.y) / d * sp, dt, zSolid, 4);
     z.face = gx < z.x ? -1 : 1;
-    if (td < 13 * 13 && z.atk <= 0) {
+    if (td < 13 * 13 && z.atk <= 0 && tp.invT <= 0) {
       z.atk = 1; tp.hp -= 45; tp.hurtT = 0; sfx('hurt');
-      if (tp.hp <= 0) { tp.hp = 0; tp.down = true; }
+      if (tp.hp <= 0) playerDown(tp);
     }
   }
   // separación entre zombies
@@ -272,11 +306,23 @@ function updateZombies(dt) {
   }
   G.zombies = zs.filter(z => !z.dead);
 }
+function playerDown(p) {
+  if (hasPot(p, 'angel')) {          // Jugo Ángel: te levanta una vez y pierdes las pociones
+    p.potions = []; p.maxHp = 100; p.hp = 100; p.invT = 3; sfx('power'); flash('¡JUGO ÁNGEL TE LEVANTÓ!');
+    for (const z of G.zombies) { const d = Math.hypot(z.x - p.x, z.y - p.y); if (z.st === 'in' && d < 40 && d > 0) move(z, (z.x - p.x) / d * 30, (z.y - p.y) / d * 30, 1, zSolid, 4); }
+    return;
+  }
+  p.hp = 0; p.down = true; p.potions = [];
+}
 function hurtZombie(z, dmg, p, knife) {
-  z.hp -= dmg; z.flash = .08; p.pts += 10;
+  if (G.killT > 0) dmg = 1e9;
+  z.hp -= dmg; z.flash = .08; addPts(p, 10);
   for (let i = 0; i < 3; i++) G.fx.push({ x: z.x, y: z.y - 2, vx: (Math.random() - .5) * 60, vy: (Math.random() - .5) * 60, l: .35, c: '#a01020' });
   if (z.hp <= 0 && !z.dead) {
-    z.dead = true; p.pts += knife ? 120 : 50; p.kills++; sfx('kill');
+    z.dead = true; addPts(p, knife ? 120 : 50); p.kills++; sfx('kill');
+    if (z.st === 'in' && G.dropsRound < 4 && Math.random() < .03) {
+      const types = Object.keys(DROPS); G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 25 }); G.dropsRound++;
+    }
     if (G.blood.length > 160) G.blood.shift();
     G.blood.push({ x: z.x + (Math.random() * 6 - 3), y: z.y + 4, s: 3 + Math.random() * 4 });
     G.fx.push({ k: 'corpse', x: z.x, y: z.y, l: .6, face: z.face });
@@ -287,33 +333,48 @@ function hurtZombie(z, dmg, p, knife) {
 function ray(x, y, a, range) {
   const cs = Math.cos(a), sn = Math.sin(a); let wallT = range;
   for (let t = 4; t < range; t += 2) { const tt = tAt(x + cs * t, y + sn * t); if (tt === VOID || tt === DOOR) { wallT = t; break; } }
-  let hit = null, ht = wallT;
+  let hit = null, ht = wallT; const all = [];
   for (const z of G.zombies) {
     if (z.dead) continue;
     const dx = z.x - x, dy = z.y - y, proj = dx * cs + dy * sn;
-    if (proj < 0 || proj > ht) continue;
-    if (Math.abs(-dx * sn + dy * cs) < 7) { hit = z; ht = proj; }
+    if (proj < 0 || proj > wallT) continue;
+    if (Math.abs(-dx * sn + dy * cs) < 7) { all.push(z); if (proj < ht) { hit = z; ht = proj; } }
   }
-  return { hit, t: ht };
+  return { hit, t: ht, wallT, all };
+}
+function explode(x, y, R, dmg, p) {
+  sfx('boom'); G.fx.push({ k: 'boom', x, y, l: .3, R });
+  for (let i = 0; i < 14; i++) G.fx.push({ x, y, vx: (Math.random() - .5) * 140, vy: (Math.random() - .5) * 140, l: .5, c: ['#ff7eb6', '#ffc93c', '#5b8cff', '#4caf3a'][i % 4] });
+  for (const z of G.zombies) if (!z.dead && Math.hypot(z.x - x, z.y - y) < R) hurtZombie(z, dmg, p, false);
 }
 function shoot(p) {
-  const g = p.guns[p.cur], W = WEAPONS[g.id];
+  const g = p.guns[p.cur], W = wstat(g);
   if (p.relT > 0 || p.cool > 0) return;
   if (g.ammo <= 0) { if (g.res > 0) reload(p); else { sfx('empty'); p.cool = .3; } return; }
-  g.ammo--; p.cool = W.rate; p.flash = .05; sfx(g.id);
+  g.ammo--; p.cool = W.rate; p.flash = .05; sfx(SFX[g.id] ? g.id : 'rifle');
   const ox = p.x + Math.cos(p.aim) * 6, oy = p.y - 1 + Math.sin(p.aim) * 6;
   for (let k = 0; k < (W.pellets || 1); k++) {
     const a = p.aim + (Math.random() - .5) * 2 * W.spread;
     const r = ray(ox, oy, a, W.range);
-    G.tracers.push({ x1: ox, y1: oy, x2: ox + Math.cos(a) * r.t, y2: oy + Math.sin(a) * r.t, l: .06 });
-    if (r.hit) hurtZombie(r.hit, W.dmg, p, false);
+    const end = W.pierce ? r.wallT : r.t;
+    G.tracers.push({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#ffd84a' : null });
+    if (W.explode) explode(ox + Math.cos(a) * r.t, oy + Math.sin(a) * r.t, W.explode, W.dmg, p);
+    else if (W.pierce) r.all.forEach(z => { hurtZombie(z, W.dmg, p, false); if (W.slow) z.slowT = 2.5; });
+    else if (r.hit) hurtZombie(r.hit, W.dmg, p, false);
   }
   if (g.ammo === 0 && g.res > 0) reload(p);
 }
 function reload(p) {
-  const g = p.guns[p.cur], W = WEAPONS[g.id];
+  const g = p.guns[p.cur], W = wstat(g);
   if (p.relT > 0 || g.ammo >= W.mag || g.res <= 0) return;
-  p.relT = W.rel; sfx('reload');
+  p.relT = W.rel * (hasPot(p, 'turbo') ? .5 : 1); sfx('reload');
+}
+function giveGun(p, g) {
+  const i = p.guns.findIndex(o => o.id === g.id);
+  if (i >= 0) { p.guns[i] = g; p.cur = i; }
+  else if (p.guns.length < 2) { p.guns.push(g); p.cur = p.guns.length - 1; }
+  else p.guns[p.cur] = g;
+  p.relT = 0; p.cool = .3;
 }
 function knife(p) {
   if (p.knifeT > 0) return;
@@ -345,6 +406,25 @@ function interactable(p) {
     }
   }
   if (!G.power && dist2(p.x, p.y, SWITCH.x, SWITCH.y) < 22 * 22) return { k: 'switch', txt: 'Encender el letrero de neón' };
+  // baúl misterioso
+  const bx = BOX_LOCS[G.box.loc];
+  if (G.roomOpen[bx.room] && dist2(p.x, p.y, bx.x, bx.y) < 20 * 20) {
+    if (G.box.st === 'idle') return { k: 'box', txt: 'Baúl misterioso [950]', cost: 950 };
+    if (G.box.st === 'ready' && G.box.owner === p) return { k: 'boxTake', txt: 'Tomar ' + WEAPONS[G.box.gun].n };
+  }
+  // máquina de mejora
+  if (dist2(p.x, p.y, PAP.x, PAP.y) < 22 * 22) {
+    if (!G.power) return { k: 'none', txt: 'La máquina necesita luz' };
+    const g = p.guns[p.cur];
+    if (G.pap.st === 'idle') return g.up ? { k: 'none', txt: 'Esta arma ya es dorada' } : { k: 'pap', txt: `Mejorar ${WEAPONS[g.id].n} [${PAP.cost}]`, cost: PAP.cost };
+    if (G.pap.st === 'ready' && G.pap.owner === p) return { k: 'papTake', txt: 'Tomar arma dorada' };
+  }
+  // pociones
+  for (const po of POTIONS) if (dist2(p.x, p.y, po.x, po.y) < 18 * 18) {
+    if (!G.power) return { k: 'none', txt: 'Las pociones necesitan luz' };
+    if (hasPot(p, po.id)) return { k: 'none', txt: 'Ya tienes ' + po.n };
+    return { k: 'potion', po, txt: `${po.n} [${po.cost}]`, cost: po.cost };
+  }
   for (const tr of TRAPS) if (dist2(p.x, p.y, tr.x, tr.y) < 14 * 14)
     return G.power ? { k: 'trap', tr, txt: tr.room === 3 ? 'Bajar por la trampilla' : 'Subir al escenario' } : { k: 'none', txt: 'La trampilla necesita luz' };
   for (const w of WINDOWS) if (w.boards < 6 && dist2(p.x, p.y, w.ix, w.iy) < 22 * 22) return { k: 'repair', w, txt: 'Mantén para reparar' };
@@ -363,14 +443,25 @@ function action(p, pressed) {
     it.d.tiles.forEach(([x, y]) => setT(x, y, FLOOR, it.d.a));
     openRoom(it.d.a); openRoom(it.d.b);
   } else if (it.k === 'buy') {
-    p.pts -= it.cost; sfx('buy');
-    const g = gun(it.wb.w);
-    if (p.guns.length < 2) { p.guns.push(g); p.cur = 1; } else p.guns[p.cur] = g;
-    p.relT = 0;
+    p.pts -= it.cost; sfx('buy'); giveGun(p, gun(it.wb.w));
   } else if (it.k === 'ammo') {
-    const g = p.guns.find(g => g.id === it.wb.w), W = WEAPONS[g.id];
+    const g = p.guns.find(g => g.id === it.wb.w), W = wstat(g);
     if (g.res >= W.res && g.ammo >= W.mag) { sfx('no'); return; }
     p.pts -= it.cost; g.res = W.res; sfx('buy');
+  } else if (it.k === 'box') {
+    p.pts -= it.cost; const b = G.box; b.st = 'spin'; b.t = 3; b.uses++; b.owner = p; sfx('box');
+  } else if (it.k === 'boxTake') {
+    giveGun(p, gun(G.box.gun)); G.box.st = 'idle'; G.box.gun = null; sfx('buy');
+  } else if (it.k === 'pap') {
+    p.pts -= it.cost; G.pap = { st: 'work', t: 3.5, owner: p, gid: p.guns[p.cur].id }; sfx('pap');
+  } else if (it.k === 'papTake') {
+    const g = p.guns.find(o => o.id === G.pap.gid);
+    if (g) giveGun(p, gun(g.id, true)); else giveGun(p, gun(G.pap.gid, true));
+    G.pap = { st: 'idle', t: 0, owner: null, gid: null }; sfx('buy'); flash('¡ARMA DORADA!');
+  } else if (it.k === 'potion') {
+    if (p.potions.length >= 4) { sfx('no'); return; }
+    p.pts -= it.cost; p.potions.push(it.po.id); sfx('drink'); flash(it.po.n.toUpperCase() + ': ' + it.po.d);
+    if (it.po.id === 'coraza') { p.maxHp = 250; p.hp = 250; }
   } else if (it.k === 'switch') {
     G.power = true; sfx('power'); G.banner = -2.5;
   } else if (it.k === 'trap' && p.trapT <= 0) {
@@ -382,14 +473,18 @@ function updatePlayer(p, inp, dt) {
   p.cool -= dt; p.knifeT -= dt; p.knifeAnim -= dt; p.repT -= dt; p.trapT -= dt; p.flash -= dt; p.hurtT += dt;
   if (p.relT > 0) {
     p.relT -= dt;
-    if (p.relT <= 0) { const g = p.guns[p.cur], W = WEAPONS[g.id], n = Math.min(W.mag - g.ammo, g.res); g.ammo += n; g.res -= n; }
+    if (p.relT <= 0) { const g = p.guns[p.cur], W = wstat(g), n = Math.min(W.mag - g.ammo, g.res); g.ammo += n; g.res -= n; }
   }
-  if (p.hurtT > 3 && p.hp < 100) p.hp = Math.min(100, p.hp + 60 * dt);
+  p.invT -= dt;
+  if (p.hurtT > 3 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 60 * dt);
   let [vx, vy] = [inp.mx, inp.my];
   p.mv = !!(vx || vy);
-  if (p.mv) move(p, vx * 70, vy * 70, dt, pSolid, 4);
+  const spd = hasPot(p, 'veloz') ? 88 : 70;
+  if (p.mv) move(p, vx * spd, vy * spd, dt, pSolid, 4);
   p.aim = inp.aim;
-  const W = WEAPONS[p.guns[p.cur].id];
+  // recoger premios
+  for (const d of G.drops) if (!d.taken && Math.hypot(d.x - p.x, d.y - p.y) < 12) { d.taken = true; takeDrop(d.k, p); }
+  const W = wstat(p.guns[p.cur]);
   if (inp.fire && (W.auto || inp.firePressed)) shoot(p);
   if (inp.reload) reload(p);
   if (inp.knife) knife(p);
@@ -571,9 +666,53 @@ function drawWallBuy(wb) {
 }
 function drawGunInHand(p, X, Y) {
   const cs = Math.cos(p.aim), sn = Math.sin(p.aim), len = p.guns[p.cur].id === 'pistola' ? 5 : 8;
-  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X + cs * len, Y + sn * len); ctx.stroke();
+  const g = p.guns[p.cur];
+  ctx.strokeStyle = g.up ? '#ffd84a' : g.id === 'hielo' ? '#8fe8ff' : g.id === 'confeti' ? '#ff7eb6' : '#1a1a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X + cs * len, Y + sn * len); ctx.stroke();
   if (p.flash > 0) r(Math.round(X + cs * (len + 2)) - 1, Math.round(Y + sn * (len + 2)) - 1, 3, 3, '#ffe08a');
   if (p.knifeAnim > 0) r(Math.round(X + cs * 10) - 1, Math.round(Y + sn * 10) - 1, 3, 3, '#e0e6f0');
+}
+function drawBoxEtc() {
+  const now = performance.now(), blink = Math.floor(now / 300) % 2;
+  // baúl misterioso (baúl de mago)
+  const b = G.box, L = BOX_LOCS[b.loc];
+  if (b.st !== 'gone') {
+    const X = L.x - 10, Y = L.y - 6, open = b.st === 'spin' || b.st === 'ready';
+    r(X, Y + 2, 20, 10, '#3a1850'); r(X, Y + 2, 20, 1, '#ffc93c'); r(X, Y + 11, 20, 1, '#ffc93c'); r(X + 9, Y + 5, 2, 3, '#ffc93c');
+    if (open) { r(X, Y - 4, 20, 4, '#4a2260'); r(X, Y - 4, 20, 1, '#ffc93c'); r(X + 2, Y, 16, 2, '#fff2b3'); }
+    else { r(X, Y, 20, 3, '#4a2260'); r(X, Y, 20, 1, '#ffc93c'); }
+    if (!open && blink) text('?', L.x, Y - 9, '#b78cff', 6, 'center');
+    // luz que sale del baúl
+    if (open) { ctx.globalAlpha = .35; r(L.x - 4, Y - 40, 8, 38, '#b78cff'); ctx.globalAlpha = 1; }
+    if (b.st === 'spin') text(b.show, L.x, Y - 18, '#f4e6d0', 6, 'center');
+    if (b.st === 'ready') text(WEAPONS[b.gun].n, L.x, Y - 18 - (blink ? 1 : 0), '#ffc93c', 6, 'center');
+  } else {
+    r(L.x - 10, L.y - 4, 20, 10, 'rgba(58,24,80,.35)');
+  }
+  // máquina de mejora (humo dorado)
+  {
+    const X = PAP.x - 9, Y = PAP.y - 14;
+    r(X, Y, 18, 22, '#1a1410'); r(X + 1, Y + 1, 16, 20, G.power ? '#b8860b' : '#4a3a20'); r(X + 3, Y + 4, 12, 8, '#1a1410');
+    r(X + 3, Y + 15, 12, 2, '#1a1410');
+    if (G.power) {
+      r(X + 4, Y + 5, 10, 6, G.pap.st === 'work' && blink ? '#fff2b3' : '#ffd84a');
+      if (G.pap.st === 'work') for (let i = 0; i < 3; i++) { const s = (now / 200 + i * 2) % 6; ctx.globalAlpha = .4; r(X + 4 + i * 4, Y - 2 - s * 2, 3, 3, '#ffe9a0'); ctx.globalAlpha = 1; }
+      if (G.pap.st === 'ready') text('LISTA', PAP.x, Y - 9, '#ffc93c', 6, 'center');
+    }
+  }
+  // pociones (máquinas de dulcería)
+  for (const po of POTIONS) {
+    const X = po.x - 6, Y = po.y - 12;
+    r(X, Y, 12, 16, '#1a1018'); r(X + 1, Y + 1, 10, 14, G.power ? po.c : '#4a3a40');
+    r(X + 3, Y + 3, 6, 5, '#1a1018'); if (G.power) r(X + 4, Y + 4, 4, 3, blink ? '#fff' : '#f4e6d0');
+    r(X + 3, Y + 11, 6, 2, '#1a1018');
+  }
+  // premios en el suelo
+  for (const d of G.drops) {
+    if (d.l < 5 && blink) continue;
+    const D = DROPS[d.k], bob = Math.sin(now / 200) * 2;
+    ctx.globalAlpha = .35; r(d.x - 8, d.y - 8 + bob, 16, 16, D.c); ctx.globalAlpha = 1;
+    r(d.x - 5, d.y - 5 + bob, 10, 10, '#1a1018'); text(D.l, d.x + 1, d.y - 3 + bob, D.c, 6, 'center');
+  }
 }
 function text(s, x, y, c, size = 8, align = 'left') {
   ctx.font = size + "px 'Press Start 2P', monospace"; ctx.textAlign = align; ctx.textBaseline = 'top';
@@ -605,6 +744,7 @@ function render() {
     r(nx, ny, 112, 18, '#1a0e14'); text('CINE', nx + 8, ny + 5, on ? '#ff3c7a' : '#4a2a36', 8);
     text('ROYAL', nx + 50, ny + 5, on ? '#3cf0ff' : '#2a3a46', 8);
   }
+  drawBoxEtc();
   // precios de puertas
   for (const d of DOORS) if (!d.open) { r(d.x - 13, d.y - 5, 26, 10, 'rgba(0,0,0,.7)'); text(String(d.cost), d.x, d.y - 3, '#ffc93c', 6, 'center'); }
   // entidades ordenadas por y
@@ -634,8 +774,13 @@ function render() {
   }
   // trazos de bala y partículas
   ctx.lineWidth = 1;
-  for (const t of G.tracers) { ctx.strokeStyle = 'rgba(255,224,138,.8)'; ctx.beginPath(); ctx.moveTo(t.x1, t.y1); ctx.lineTo(t.x2, t.y2); ctx.stroke(); }
-  for (const f of G.fx) if (!f.k) r(Math.round(f.x), Math.round(f.y), 1, 1, f.c);
+  for (const t of G.tracers) { ctx.strokeStyle = t.c || 'rgba(255,224,138,.8)'; ctx.lineWidth = t.c === '#8fe8ff' ? 2 : 1; ctx.beginPath(); ctx.moveTo(t.x1, t.y1); ctx.lineTo(t.x2, t.y2); ctx.stroke(); }
+  ctx.lineWidth = 1;
+  for (const f of G.fx) {
+    if (!f.k) r(Math.round(f.x), Math.round(f.y), 2, 2, f.c);
+    else if (f.k === 'boom') { ctx.globalAlpha = f.l / .3 * .6; ctx.fillStyle = '#ffc93c'; ctx.beginPath(); ctx.arc(f.x, f.y, f.R * (1.2 - f.l / .3 * .6), 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1; }
+    else if (f.k === 'dove') { const t = 2.5 - f.l, X = Math.round(f.x + t * 30), Y = Math.round(f.y - 10 - t * 40), w = Math.floor(t * 8) % 2; r(X - 2, Y, 5, 3, '#fff'); r(X - 5 + (w ? 0 : 1), Y - 1 - w, 3, 2, '#fff'); r(X + 3, Y - 1 - w, 3, 2, '#fff'); r(X + 3, Y + 1, 1, 1, '#ffb02e'); }
+  }
   ctx.restore();
   // oscuridad: linterna alrededor de cada jugador
   dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, VW, VH);
@@ -650,11 +795,19 @@ function render() {
   drawHUD(me);
 }
 function drawHUD(p) {
-  if (p.hp < 100) { const a = (1 - p.hp / 100) * .55; r(0, 0, VW, 6, `rgba(160,0,20,${a})`); r(0, VH - 6, VW, 6, `rgba(160,0,20,${a})`); r(0, 0, 6, VH, `rgba(160,0,20,${a})`); r(VW - 6, 0, 6, VH, `rgba(160,0,20,${a})`); }
+  const wf = G.fx.find(f => f.k === 'white'); if (wf) { ctx.globalAlpha = wf.l / .5; r(0, 0, VW, VH, '#fff'); ctx.globalAlpha = 1; }
+  // pociones que tienes
+  p.potions.forEach((id, i) => { const po = POTIONS.find(o => o.id === id); r(28 + i * 10, VH - 14, 8, 10, '#1a1018'); r(29 + i * 10, VH - 13, 6, 8, po.c); });
+  // premios activos
+  let py = 18;
+  if (G.x2T > 0 && (G.x2T > 5 || Math.floor(performance.now() / 250) % 2)) { text('x2 ' + Math.ceil(G.x2T), 6, py, '#ffc93c', 6); py += 9; }
+  if (G.killT > 0 && (G.killT > 5 || Math.floor(performance.now() / 250) % 2)) { text('GOLPE MORTAL ' + Math.ceil(G.killT), 6, py, '#ff4040', 6); }
+  if (G.msgT > 0) { ctx.globalAlpha = Math.min(1, G.msgT); text(G.msg, VW / 2, 62, '#ffc93c', 6, 'center'); ctx.globalAlpha = 1; }
+  if (p.hp < p.maxHp) { const a = (1 - p.hp / p.maxHp) * .55; r(0, 0, VW, 6, `rgba(160,0,20,${a})`); r(0, VH - 6, VW, 6, `rgba(160,0,20,${a})`); r(0, 0, 6, VH, `rgba(160,0,20,${a})`); r(VW - 6, 0, 6, VH, `rgba(160,0,20,${a})`); }
   text(String(G.round || 0), 6, VH - 22, '#d8283a', 16);
   text(String(p.pts), VW - 6, 6, '#ffc93c', 8, 'right');
-  const g = p.guns[p.cur], W = WEAPONS[g.id];
-  text(W.n, VW - 6, VH - 24, '#f4e6d0', 6, 'right');
+  const g = p.guns[p.cur], W = wstat(g);
+  text(W.n, VW - 6, VH - 24, g.up ? '#ffd84a' : '#f4e6d0', 6, 'right');
   text(p.relT > 0 ? 'RECARGANDO' : `${g.ammo} / ${g.res}`, VW - 6, VH - 14, g.ammo === 0 ? '#ff6b6b' : '#f4e6d0', 8, 'right');
   const it = interactable(p);
   if (it) {
@@ -684,11 +837,54 @@ function update(dt) {
     if (G.toSpawn <= 0 && G.zombies.length === 0) { G.state = 'break'; G.breakT = 9; sfx('roundEnd'); }
   }
   updateZombies(dt);
+  updateBox(dt);
+  if (G.pap.st === 'work') { G.pap.t -= dt; if (G.pap.t <= 0) { G.pap.st = 'ready'; G.pap.t = 10; sfx('buy'); } }
+  else if (G.pap.st === 'ready') { G.pap.t -= dt; if (G.pap.t <= 0) G.pap = { st: 'idle', t: 0, owner: null, gid: null }; }
+  for (const d of G.drops) d.l -= dt;
+  G.drops = G.drops.filter(d => d.l > 0 && !d.taken);
+  G.x2T -= dt; G.killT -= dt; G.msgT -= dt;
   if (G.banner > 0) G.banner = Math.max(0, G.banner - dt); else if (G.banner < 0) G.banner = Math.min(0, G.banner + dt);
   for (const f of G.fx) { f.l -= dt; if (!f.k) { f.x += f.vx * dt; f.y += f.vy * dt; } }
   G.fx = G.fx.filter(f => f.l > 0);
   for (const t of G.tracers) t.l -= dt; G.tracers = G.tracers.filter(t => t.l > 0);
   if (G.players.every(p => p.down)) gameOver();
+}
+function updateBox(dt) {
+  const b = G.box;
+  if (b.st === 'spin') {
+    b.t -= dt;
+    b.show = WEAPONS[BOX_POOL[Math.floor(performance.now() / 120) % BOX_POOL.length]].n;
+    if (b.t <= 0) {
+      if (b.uses >= b.minUses && Math.random() < .35) {      // la paloma se lleva el baúl
+        b.st = 'gone'; b.t = 4; sfx('dove'); flash('¡LA PALOMA SE LLEVÓ EL BAÚL!');
+        if (b.owner) b.owner.pts += 950;
+        const L = BOX_LOCS[b.loc]; G.fx.push({ k: 'dove', x: L.x, y: L.y, l: 2.5 });
+      } else {
+        const owned = b.owner ? b.owner.guns.map(g => g.id) : [];
+        const pool = BOX_POOL.filter(id => !owned.includes(id));
+        b.gun = pool[Math.floor(Math.random() * pool.length)]; b.st = 'ready'; b.t = 9;
+      }
+    }
+  } else if (b.st === 'ready') {
+    b.t -= dt; if (b.t <= 0) { b.st = 'idle'; b.gun = null; }
+  } else if (b.st === 'gone') {
+    b.t -= dt;
+    if (b.t <= 0) {
+      let n; do { n = Math.floor(Math.random() * BOX_LOCS.length); } while (n === b.loc);
+      b.loc = n; b.st = 'idle'; b.uses = 0; b.minUses = 4 + Math.floor(Math.random() * 4);
+    }
+  }
+}
+function takeDrop(k, p) {
+  sfx('drop'); flash(DROPS[k].n);
+  if (k === 'ammo') G.players.forEach(pl => pl.guns.forEach(g => { const W = wstat(g); g.res = W.res; g.ammo = W.mag; }));
+  if (k === 'x2') G.x2T = 30;
+  if (k === 'kill') G.killT = 30;
+  if (k === 'bomb') {
+    sfx('boom'); G.fx.push({ k: 'white', l: .5 });
+    for (const z of G.zombies) if (!z.dead && z.st === 'in') { z.hp = 0; z.dead = true; G.fx.push({ k: 'corpse', x: z.x, y: z.y, l: .6 }); }
+    G.players.forEach(pl => { if (!pl.down) pl.pts += 400; });
+  }
 }
 function gameOver() {
   phase = 'over'; const p = G.players[0];
