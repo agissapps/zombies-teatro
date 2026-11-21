@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0b0810">
 <title>Función de Medianoche</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Medianoche">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
@@ -90,6 +97,8 @@
       <button id="bHelp" class="small">¿Cómo se juega?</button>
     </div>
     <p id="status" class="status"></p>
+    <button id="bInstall" class="small hidden" style="background:#2f7d24;box-shadow:inset -3px -3px 0 #1d5216,3px 3px 0 #000">Instalar el juego (PWA) 📲</button>
+    <p id="iosHint" class="hidden" style="font-size:7px;color:#a88">Para instalarlo en iPhone: botón Compartir ⬆️ → «Agregar a inicio»</p>
   </div>
 </div>
 
@@ -139,6 +148,6 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="game.js?v=5"></script>
+<script src="game.js?v=6"></script>
 </body>
 </html>

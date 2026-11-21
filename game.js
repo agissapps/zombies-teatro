@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v5 · fase 3 en línea';
+const VERSION = 'v6 · en línea + PWA';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -1325,3 +1325,12 @@ addEventListener('resize', resize); addEventListener('orientationchange', () => 
 resize();
 if (document.fonts && document.fonts.load) document.fonts.load("8px 'Press Start 2P'");
 requestAnimationFrame(frame);
+
+/* ============================ PWA (instalar en el dispositivo) ============================ */
+if ('serviceWorker' in navigator && location.protocol !== 'file:') addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { }));
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || navigator.standalone;
+let installEv = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEv = e; $('bInstall').classList.remove('hidden'); });
+$('bInstall').onclick = async () => { if (!installEv) return; installEv.prompt(); try { await installEv.userChoice; } catch (e) { } installEv = null; $('bInstall').classList.add('hidden'); };
+addEventListener('appinstalled', () => { $('bInstall').classList.add('hidden'); setStatus('¡Instalado! Ábrelo desde su ícono.'); });
+if (!standalone && /iPhone|iPad|iPod/.test(navigator.userAgent)) $('iosHint').classList.remove('hidden');
