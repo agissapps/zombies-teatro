@@ -106,6 +106,7 @@
       <input id="code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters">
       <button id="bJoin" class="alt">Unirse</button>
     </div>
+    <button id="bMapSel" class="small" style="width:100%;margin-top:6px">🗺 Mapa 1 · Teatro ▸</button>
     <div class="row">
       <button id="bPlay" class="small">Jugar solo</button>
       <button id="bHelp" class="small">¿Cómo se juega?</button>
@@ -147,6 +148,8 @@
     <p>Código de la sala:</p>
     <div class="code" id="roomCode">----</div>
     <button id="bShare" class="small">Invitar amigos 📨</button>
+    <button id="bLobbyMap" class="small hidden">🗺 Mapa 1 · Teatro ▸</button>
+    <p class="status" id="lobbyMap"></p>
     <div id="lobbyList"></div>
     <p class="status" id="lobbyStatus"></p>
     <button id="bStart" class="hidden">¡Que empiece la función!</button>
@@ -165,6 +168,6 @@
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="game.js?v=17"></script>
+<script src="game.js?v=18"></script>
 </body>
 </html>

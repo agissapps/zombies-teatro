@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v17 · pistola inicial 8/32';
+const VERSION = 'v18 · mapa 2 y más zombies';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -15,52 +15,23 @@ const inb = (x, y) => x >= 0 && y >= 0 && x < MW && y < MH;
 const T = (x, y) => inb(x, y) ? tiles[idx(x, y)] : VOID;
 const tAt = (px, py) => T(Math.floor(px / TS), Math.floor(py / TS));
 
-const ROOMS = [
-  { n: 'Vestíbulo', cells: [[2, 1]], fl: 'carpet' },
-  { n: 'Dulcería', cells: [[1, 1]], fl: 'checker' },
-  { n: 'Sala de butacas', cells: [[2, 2]], fl: 'carpetDark' },
-  { n: 'Escenario', cells: [[1, 2]], fl: 'wood' },
-  { n: 'Callejón', cells: [[0, 1]], fl: 'asphalt' },
-  { n: 'Camerinos', cells: [[0, 2]], fl: 'purple' },
-  { n: 'Azotea del neón', cells: [[0, 0]], fl: 'gravel' },
-  { n: 'Sótano de utilería', cells: [[0, 3], [1, 3]], fl: 'concrete' },
-];
+// todo lo que depende del mapa se arma en buildMap(id): 0 = Teatro, 1 = Bambalinas (pasillos angostos)
+const MAPS = [{ n: 'Teatro' }, { n: 'Bambalinas' }];
+let mapId = 0, ROOMS = [], DOORS = [], WINDOWS = [], FREE_LINKS = [], BOX_LOCS = [], POTIONS = [], WALLBUYS = [], TRAPS = [];
+const PAP = { x: 0, y: 0, cost: 5000 }, SWITCH = { x: 0, y: 0, txt: '' }, START = { x: 0, y: 0 }, NEON = { on: false, x: 0, y: 0 };
+let LUZ_TXT = 'azotea';
+const tcx = v => v * TS + 8;
 function setT(x, y, t, room) { const i = idx(x, y); tiles[i] = t; if (room !== undefined) roomAt[i] = room; }
-ROOMS.forEach((R, r) => R.cells.forEach(([cx, cy]) => {
-  for (let y = cy * CH + 1; y < cy * CH + CH; y++) for (let x = cx * CW + 1; x < cx * CW + CW; x++) setT(x + MX, y + MY, FLOOR, r);
-}));
-for (let y = 3 * CH + 1; y < 4 * CH; y++) setT(CW + MX, y + MY, FLOOR, 7);   // sótano de 2 celdas
-
-function wallBetween(a, b) {
-  if (a[1] === b[1]) { const x = Math.max(a[0], b[0]) * CW; return [0, 1, 2].map(k => [x + MX, a[1] * CH + 5 + k + MY]); }
-  const y = Math.max(a[1], b[1]) * CH; return [0, 1, 2].map(k => [a[0] * CW + 7 + k + MX, y + MY]);
+function rect(x, y, w, h, room) { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) setT(i, j, FLOOR, room); }
+function addDoor(cost, a, b, tl) {
+  const id = DOORS.length, d = { cost, a, b, tiles: tl };
+  tl.forEach(([x, y]) => { setT(x, y, DOOR); doorAt[idx(x, y)] = id; });
+  d.x = tcx(tl.reduce((s, t) => s + t[0], 0) / tl.length); d.y = tcx(tl.reduce((s, t) => s + t[1], 0) / tl.length);
+  d.vertical = tl.every(t => t[0] === tl[0][0]);
+  DOORS.push(d);
 }
-const DOORS = [
-  { cost: 750, a: 0, b: 1, c: [[2, 1], [1, 1]] },
-  { cost: 1000, a: 0, b: 2, c: [[2, 1], [2, 2]] },
-  { cost: 1250, a: 3, b: 5, c: [[1, 2], [0, 2]] },
-  { cost: 1000, a: 1, b: 4, c: [[1, 1], [0, 1]] },
-  { cost: 1250, a: 4, b: 6, c: [[0, 1], [0, 0]] },
-  { cost: 1500, a: 4, b: 5, c: [[0, 1], [0, 2]] },
-  { cost: 1000, a: 5, b: 7, c: [[0, 2], [0, 3]] },
-];
-DOORS.forEach((d, id) => {
-  d.tiles = wallBetween(d.c[0], d.c[1]);
-  d.tiles.forEach(([x, y]) => { setT(x, y, DOOR); doorAt[idx(x, y)] = id; });
-  d.x = d.tiles[1][0] * TS + 8; d.y = d.tiles[1][1] * TS + 8;
-  d.vertical = d.c[0][1] === d.c[1][1];
-});
-wallBetween([2, 2], [1, 2]).forEach(([x, y]) => setT(x, y, FLOOR, 2));      // paso libre sala ↔ escenario
-const FREE_LINKS = [[2, 3]];
-
-const WINDOWS = [];
-function addWin(room, cx, cy, side, off) {
-  let x, y, dx = 0, dy = 0;
-  if (side === 'T') { x = cx * CW + off; y = cy * CH; dy = -1; }
-  if (side === 'B') { x = cx * CW + off; y = (cy + 1) * CH; dy = 1; }
-  if (side === 'L') { x = cx * CW; y = cy * CH + off; dx = -1; }
-  if (side === 'R') { x = (cx + 1) * CW; y = cy * CH + off; dx = 1; }
-  x += MX; y += MY;
+// ventana en la pared (x, y); (dx, dy) apunta hacia afuera
+function addWinT(room, x, y, dx, dy) {
   const c = (a, b) => [a * TS + 8, b * TS + 8];
   const w = { room, x, y, dx, dy, boards: 6, vertical: dx !== 0 };
   [w.px, w.py] = c(x, y); [w.ox, w.oy] = c(x + dx, y + dy); [w.sx, w.sy] = c(x + 3 * dx, y + 3 * dy); [w.ix, w.iy] = c(x - dx, y - dy);
@@ -68,16 +39,138 @@ function addWin(room, cx, cy, side, off) {
   for (let k = 1; k <= 3; k++) setT(x + k * dx, y + k * dy, OUT);
   WINDOWS.push(w);
 }
-addWin(0, 2, 1, 'T', 4); addWin(0, 2, 1, 'T', 11); addWin(0, 2, 1, 'R', 6);
-addWin(1, 1, 1, 'T', 4); addWin(1, 1, 1, 'T', 11);
-addWin(2, 2, 2, 'R', 3); addWin(2, 2, 2, 'R', 8);
-addWin(4, 0, 1, 'L', 3); addWin(4, 0, 1, 'L', 8);
-addWin(5, 0, 2, 'L', 5);
-addWin(6, 0, 0, 'T', 4); addWin(6, 0, 0, 'L', 5); addWin(6, 0, 0, 'R', 5);
-addWin(7, 0, 3, 'B', 5); addWin(7, 1, 3, 'B', 10); addWin(7, 1, 3, 'R', 6);
+const POT_INFO = {
+  coraza: { n: 'Soda Coraza', cost: 2500, c: '#e8443a', d: 'Aguantas más golpes' },
+  turbo: { n: 'Palomitas Turbo', cost: 2000, c: '#ffc93c', d: 'Recargas el doble de rápido' },
+  angel: { n: 'Jugo Ángel', cost: 1500, c: '#8fd0ff', d: 'Te levanta una vez si caes' },
+  veloz: { n: 'Paleta Veloz', cost: 2000, c: '#b78cff', d: 'Corres más rápido' },
+};
+// coordenadas en casillas absolutas
+function setObjects(o) {
+  BOX_LOCS = o.box.map(([x, y, room]) => ({ x: tcx(x), y: tcx(y), room }));
+  PAP.x = tcx(o.pap[0]); PAP.y = tcx(o.pap[1]);
+  POTIONS = o.pot.map(([id, x, y]) => ({ id, ...POT_INFO[id], x: tcx(x), y: tcx(y) }));
+  WALLBUYS = o.wall.map(([w, tx, ty]) => ({ w, tx, ty, x: tcx(tx), y: tcx(ty) }));
+  SWITCH.x = tcx(o.sw[0]); SWITCH.y = tcx(o.sw[1]); SWITCH.txt = o.swTxt;
+  TRAPS = o.traps.map(([x, y, to, room, txt]) => ({ x: tcx(x), y: tcx(y), to, room, txt }));
+  START.x = tcx(o.start[0]); START.y = tcx(o.start[1]);
+  NEON.on = !!o.neon; if (o.neon) { NEON.x = o.neon[0] * TS; NEON.y = o.neon[1] * TS; }
+  LUZ_TXT = o.luz;
+}
+function buildMap(id) {
+  mapId = MAPS[id] ? id : 0;
+  tiles.fill(VOID); roomAt.fill(-1); doorAt.fill(-1); winAt.fill(-1);
+  DOORS = []; WINDOWS = [];
+  (mapId === 1 ? buildBambalinas : buildTeatro)();
+}
 
-// butacas en la sala (obstáculos con pasillos)
-for (const y of [27, 29, 31, 33]) for (const x of [35, 36, 37, 38, 42, 43, 44, 45]) setT(x + MX, y + MY, SEAT);
+/* ---------- mapa 1: el teatro (cuadrícula de salas grandes) ---------- */
+function buildTeatro() {
+  ROOMS = [
+    { n: 'Vestíbulo', cells: [[2, 1]], fl: 'carpet' },
+    { n: 'Dulcería', cells: [[1, 1]], fl: 'checker' },
+    { n: 'Sala de butacas', cells: [[2, 2]], fl: 'carpetDark' },
+    { n: 'Escenario', cells: [[1, 2]], fl: 'wood' },
+    { n: 'Callejón', cells: [[0, 1]], fl: 'asphalt' },
+    { n: 'Camerinos', cells: [[0, 2]], fl: 'purple' },
+    { n: 'Azotea del neón', cells: [[0, 0]], fl: 'gravel' },
+    { n: 'Sótano de utilería', cells: [[0, 3], [1, 3]], fl: 'concrete' },
+  ];
+  ROOMS.forEach((R, r) => R.cells.forEach(([cx, cy]) => {
+    for (let y = cy * CH + 1; y < cy * CH + CH; y++) for (let x = cx * CW + 1; x < cx * CW + CW; x++) setT(x + MX, y + MY, FLOOR, r);
+  }));
+  for (let y = 3 * CH + 1; y < 4 * CH; y++) setT(CW + MX, y + MY, FLOOR, 7);   // sótano de 2 celdas
+  const wallBetween = (a, b) => {
+    if (a[1] === b[1]) { const x = Math.max(a[0], b[0]) * CW; return [0, 1, 2].map(k => [x + MX, a[1] * CH + 5 + k + MY]); }
+    const y = Math.max(a[1], b[1]) * CH; return [0, 1, 2].map(k => [a[0] * CW + 7 + k + MX, y + MY]);
+  };
+  [[750, 0, 1, [2, 1], [1, 1]], [1000, 0, 2, [2, 1], [2, 2]], [1250, 3, 5, [1, 2], [0, 2]], [1000, 1, 4, [1, 1], [0, 1]],
+  [1250, 4, 6, [0, 1], [0, 0]], [1500, 4, 5, [0, 1], [0, 2]], [1000, 5, 7, [0, 2], [0, 3]]]
+    .forEach(([cost, a, b, c0, c1]) => addDoor(cost, a, b, wallBetween(c0, c1)));
+  wallBetween([2, 2], [1, 2]).forEach(([x, y]) => setT(x, y, FLOOR, 2));      // paso libre sala ↔ escenario
+  FREE_LINKS = [[2, 3]];
+  const addWin = (room, cx, cy, side, off) => {
+    let x, y, dx = 0, dy = 0;
+    if (side === 'T') { x = cx * CW + off; y = cy * CH; dy = -1; }
+    if (side === 'B') { x = cx * CW + off; y = (cy + 1) * CH; dy = 1; }
+    if (side === 'L') { x = cx * CW; y = cy * CH + off; dx = -1; }
+    if (side === 'R') { x = (cx + 1) * CW; y = cy * CH + off; dx = 1; }
+    addWinT(room, x + MX, y + MY, dx, dy);
+  };
+  addWin(0, 2, 1, 'T', 4); addWin(0, 2, 1, 'T', 11); addWin(0, 2, 1, 'R', 6);
+  addWin(1, 1, 1, 'T', 4); addWin(1, 1, 1, 'T', 11);
+  addWin(2, 2, 2, 'R', 3); addWin(2, 2, 2, 'R', 8);
+  addWin(4, 0, 1, 'L', 3); addWin(4, 0, 1, 'L', 8);
+  addWin(5, 0, 2, 'L', 5);
+  addWin(6, 0, 0, 'T', 4); addWin(6, 0, 0, 'L', 5); addWin(6, 0, 0, 'R', 5);
+  addWin(7, 0, 3, 'B', 5); addWin(7, 1, 3, 'B', 10); addWin(7, 1, 3, 'R', 6);
+  // butacas en la sala (obstáculos con pasillos)
+  for (const y of [27, 29, 31, 33]) for (const x of [35, 36, 37, 38, 42, 43, 44, 45]) setT(x + MX, y + MY, SEAT, 2);
+  const m = v => v + MX;
+  setObjects({
+    box: [[m(40), m(35), 2], [m(8), m(22), 4], [m(28), m(46), 7]], pap: [m(8), m(46)],
+    pot: [['coraza', m(18), m(22)], ['turbo', m(30), m(22)], ['angel', m(12), m(34)], ['veloz', m(18), m(26)]],
+    wall: [['pistola', 2, 1, 7], ['escopeta', 1, 1, 8], ['subfusil', 2, 2, 12], ['rifle', 0, 1, 12], ['ametra', 0, 2, 3]]
+      .map(([w, cx, cy, off]) => [w, cx * CW + off + MX, cy * CH + MY]),
+    sw: [m(12), m(1)], swTxt: 'Encender el letrero de neón',
+    traps: [[m(24), m(30), 1, 3, 'Bajar por la trampilla'], [m(24), m(42), 0, 7, 'Subir al escenario']],
+    start: [m(40), m(18)], neon: [m(4), m(2)], luz: 'azotea',
+  });
+}
+
+/* ---------- mapa 2: bambalinas (salas chicas unidas por pasillos de 2 casillas) ---------- */
+function buildBambalinas() {
+  ROOMS = [
+    { n: 'Vestíbulo', fl: 'carpet' },            // 0 (igual de grande que en el teatro)
+    { n: 'Taquilla', fl: 'checker' },            // 1
+    { n: 'Oficina del gerente', fl: 'wood' },    // 2
+    { n: 'Bodega', fl: 'asphalt' },              // 3
+    { n: 'Sala de ensayo', fl: 'carpetDark' },   // 4 (la única sala grande)
+    { n: 'Camerinos', fl: 'purple' },            // 5
+    { n: 'Sótano', fl: 'concrete' },             // 6
+    { n: 'Cuarto de luces', fl: 'gravel' },      // 7
+  ];
+  rect(19, 5, 15, 11, 0);                                  // vestíbulo
+  rect(5, 5, 6, 9, 1); rect(11, 9, 7, 2, 1);               // taquilla + pasillo
+  rect(42, 5, 6, 10, 2); rect(35, 12, 7, 2, 2);            // oficina + pasillo
+  rect(5, 23, 10, 9, 3); rect(7, 15, 2, 8, 3); rect(15, 27, 4, 2, 3);   // bodega + pasillos
+  rect(20, 21, 13, 12, 4); rect(26, 17, 2, 4, 4);          // sala de ensayo + pasillo
+  rect(38, 22, 10, 9, 5); rect(44, 16, 2, 6, 5); rect(34, 23, 4, 2, 5); // camerinos + pasillos
+  rect(5, 41, 14, 8, 6); rect(9, 33, 2, 8, 6); rect(19, 44, 16, 2, 6);  // sótano + pasillo largo de servicio
+  rect(36, 40, 12, 8, 7); rect(42, 32, 2, 8, 7);           // cuarto de luces + pasillo
+  addDoor(750, 0, 1, [[18, 9], [18, 10]]);
+  addDoor(1000, 0, 2, [[34, 12], [34, 13]]);
+  addDoor(1250, 0, 4, [[26, 16], [27, 16]]);
+  addDoor(1000, 1, 3, [[7, 14], [8, 14]]);
+  addDoor(1000, 3, 4, [[19, 27], [19, 28]]);
+  addDoor(1250, 2, 5, [[44, 15], [45, 15]]);
+  addDoor(1250, 4, 5, [[33, 23], [33, 24]]);
+  addDoor(1000, 3, 6, [[9, 32], [10, 32]]);
+  addDoor(1500, 5, 7, [[42, 31], [43, 31]]);
+  addDoor(1250, 6, 7, [[35, 44], [35, 45]]);
+  FREE_LINKS = [];
+  addWinT(0, 22, 4, 0, -1); addWinT(0, 30, 4, 0, -1); addWinT(0, 34, 7, 1, 0);
+  addWinT(1, 7, 4, 0, -1); addWinT(1, 4, 9, -1, 0);
+  addWinT(2, 44, 4, 0, -1); addWinT(2, 48, 8, 1, 0);
+  addWinT(3, 4, 27, -1, 0); addWinT(3, 13, 32, 0, 1);
+  addWinT(4, 19, 23, -1, 0); addWinT(4, 33, 30, 1, 0); addWinT(4, 24, 33, 0, 1);
+  addWinT(5, 48, 26, 1, 0); addWinT(5, 40, 21, 0, -1);
+  addWinT(6, 8, 49, 0, 1); addWinT(6, 15, 49, 0, 1); addWinT(6, 4, 44, -1, 0);
+  addWinT(7, 48, 43, 1, 0); addWinT(7, 40, 48, 0, 1); addWinT(7, 38, 39, 0, -1);
+  // sillas de ensayo con pasillo al centro
+  for (const y of [24, 26, 28]) for (const x of [22, 23, 24, 25, 28, 29, 30, 31]) setT(x, y, SEAT, 4);
+  setObjects({
+    box: [[21, 31, 4], [13, 24, 3], [17, 47, 6]], pap: [16, 42],
+    pot: [['coraza', 10, 6], ['turbo', 47, 6], ['angel', 6, 24], ['veloz', 47, 23]],
+    wall: [['pistola', 26, 4], ['escopeta', 9, 4], ['subfusil', 30, 20], ['rifle', 46, 4], ['ametra', 42, 21]],
+    sw: [46, 41], swTxt: 'Subir el interruptor de la luz',
+    traps: [[31, 31, 1, 4, 'Bajar por la trampilla'], [12, 42, 0, 6, 'Subir a la sala de ensayo']],
+    start: [26, 10], neon: null, luz: 'cuarto de luces',
+  });
+}
+let mapSel = 0;
+try { mapSel = +localStorage.getItem('fdm-map') === 1 ? 1 : 0; } catch (e) { }
+buildMap(mapSel);
 
 const WEAPONS = {
   pistola: { n: 'Pistola', dmg: 25, rate: .22, mag: 8, res: 80, rel: 1.2, spread: .03, range: 210, auto: false, cost: 250 },
@@ -96,22 +189,7 @@ function wstat(g) {      // estadísticas del arma (dobles si está mejorada)
   if (!g.up) return W;
   return { ...W, n: W.n + ' mejorada', dmg: W.dmg * 2, mag: Math.round(W.mag * 1.5), res: W.res * 2, explode: W.explode && W.explode * 1.3 };
 }
-const BOX_LOCS = [[40, 35, 2], [8, 22, 4], [28, 46, 7]].map(([x, y, room]) => ({ x: (x + MX) * TS + 8, y: (y + MY) * TS + 8, room }));
-const PAP = { x: (8 + MX) * TS + 8, y: (46 + MY) * TS + 8, cost: 5000 };
-const POTIONS = [
-  { id: 'coraza', n: 'Soda Coraza', cost: 2500, x: 18, y: 22, c: '#e8443a', d: 'Aguantas más golpes' },
-  { id: 'turbo', n: 'Palomitas Turbo', cost: 2000, x: 30, y: 22, c: '#ffc93c', d: 'Recargas el doble de rápido' },
-  { id: 'angel', n: 'Jugo Ángel', cost: 1500, x: 12, y: 34, c: '#8fd0ff', d: 'Te levanta una vez si caes' },
-  { id: 'veloz', n: 'Paleta Veloz', cost: 2000, x: 18, y: 26, c: '#b78cff', d: 'Corres más rápido' },
-].map(p => ({ ...p, x: (p.x + MX) * TS + 8, y: (p.y + MY) * TS + 8 }));
 const DROPS = { ammo: { n: 'MUNICIÓN MÁXIMA', c: '#8fd0ff', l: 'M' }, x2: { n: 'DOBLE PUNTOS', c: '#ffc93c', l: '2' }, kill: { n: 'GOLPE MORTAL', c: '#ff4040', l: '!' }, bomb: { n: 'BOMBA', c: '#ff9a3c', l: 'B' }, carp: { n: 'CARPINTERO', c: '#b07a46', l: 'C' } };
-// armas en la pared: [arma, celda, desplazamiento en la pared de arriba]
-const WALLBUYS = [['pistola', 2, 1, 7], ['escopeta', 1, 1, 8], ['subfusil', 2, 2, 12], ['rifle', 0, 1, 12], ['ametra', 0, 2, 3]]
-  .map(([w, cx, cy, off]) => ({ w, tx: cx * CW + off + MX, ty: cy * CH + MY, x: (cx * CW + off + MX) * TS + 8, y: (cy * CH + MY) * TS + 8 }));
-
-const SWITCH = { x: (12 + MX) * TS + 8, y: (1 + MY) * TS + 8 };
-const TRAPS = [{ x: (24 + MX) * TS + 8, y: (30 + MY) * TS + 8, to: 1, room: 3 }, { x: (24 + MX) * TS + 8, y: (42 + MY) * TS + 8, to: 0, room: 7 }];
-const START = { x: (40 + MX) * TS + 8, y: (18 + MY) * TS + 8 };
 
 /* ============================ SPRITES ============================ */
 const SP = {};
@@ -500,7 +578,7 @@ function interactable(p) {
         : { k: 'buy', wb, txt: `Comprar ${W.n} [${W.cost}]`, cost: W.cost };
     }
   }
-  if (!G.power && dist2(p.x, p.y, SWITCH.x, SWITCH.y) < 22 * 22) return { k: 'switch', txt: 'Encender el letrero de neón' };
+  if (!G.power && dist2(p.x, p.y, SWITCH.x, SWITCH.y) < 22 * 22) return { k: 'switch', txt: SWITCH.txt };
   // baúl misterioso
   const bx = BOX_LOCS[G.box.loc];
   if (G.roomOpen[bx.room] && dist2(p.x, p.y, bx.x, bx.y) < 20 * 20) {
@@ -521,7 +599,7 @@ function interactable(p) {
     return { k: 'potion', po, txt: `${po.n} [${po.cost}]`, cost: po.cost };
   }
   for (const tr of TRAPS) if (dist2(p.x, p.y, tr.x, tr.y) < 14 * 14)
-    return G.power ? { k: 'trap', tr, txt: tr.room === 3 ? 'Bajar por la trampilla' : 'Subir al escenario' } : { k: 'none', txt: 'La trampilla necesita luz' };
+    return G.power ? { k: 'trap', tr, txt: tr.txt } : { k: 'none', txt: 'La trampilla necesita luz' };
   for (const w of WINDOWS) if (w.boards < 6 && dist2(p.x, p.y, w.ix, w.iy) < 22 * 22) return { k: 'repair', w, txt: 'Mantén para reparar' };
   return null;
 }
@@ -1004,7 +1082,7 @@ function setRoute(kind) {
   pts[0] = [me.x, me.y]; pts.push([best.x, best.y]);
   pts = pts.filter((p, i) => i === 0 || i === pts.length - 1 || (pts[i - 1][0] - p[0]) * (pts[i + 1][1] - p[1]) !== (pts[i - 1][1] - p[1]) * (pts[i + 1][0] - p[0]));
   ROUTE = { pts, x: best.x, y: best.y };
-  routeMsg('Ruta: ' + best.n + (doors.length ? ' · abre puerta ' + doors.join(' + ') : '') + (best.luz && !G.power ? ' · necesita la luz (azotea)' : ''));
+  routeMsg('Ruta: ' + best.n + (doors.length ? ' · abre puerta ' + doors.join(' + ') : '') + (best.luz && !G.power ? ' · necesita la luz (' + LUZ_TXT + ')' : ''));
   closeMap();
 }
 function drawRoute(me) {
@@ -1026,7 +1104,7 @@ function drawMap(me) {
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const t = T(x, y); let c = null;
     if (t === FLOOR) { const rm = roomAt[idx(x, y)]; c = rm >= 0 ? MAPFL[ROOMS[rm].fl] : '#5a4030'; ctx.globalAlpha = rm >= 0 && !G.roomOpen[rm] ? .35 : 1; }
-    else if (t === SEAT) { c = '#2a0c12'; ctx.globalAlpha = G.roomOpen[2] ? 1 : .35; }
+    else if (t === SEAT) { c = '#2a0c12'; ctx.globalAlpha = G.roomOpen[roomAt[idx(x, y)]] ? 1 : .35; }
     else if (t === DOOR) { c = '#ffc93c'; ctx.globalAlpha = 1; }
     else if (t === WIN) { c = '#b07a46'; ctx.globalAlpha = 1; }
     if (c) { ctx.fillStyle = c; ctx.fillRect(ox + x * s, oy + y * s, s + .3, s + .3); }
@@ -1076,8 +1154,8 @@ function render() {
     if (G.power && Math.floor(performance.now() / 400) % 2) { r(tr.x - 7, tr.y - 7, 14, 1, '#ffc93c'); r(tr.x - 7, tr.y + 6, 14, 1, '#ffc93c'); }
   }
   // letrero de neón en la azotea
-  {
-    const nx = (4 + MX) * TS, ny = (2 + MY) * TS, on = G.power && Math.floor(performance.now() / 700) % 6 !== 0;
+  if (NEON.on) {
+    const nx = NEON.x, ny = NEON.y, on = G.power && Math.floor(performance.now() / 700) % 6 !== 0;
     r(nx, ny, 112, 18, '#1a0e14'); text('CINE', nx + 8, ny + 5, on ? '#ff3c7a' : '#4a2a36', 8);
     text('ROYAL', nx + 50, ny + 5, on ? '#3cf0ff' : '#2a3a46', 8);
   }
@@ -1214,7 +1292,8 @@ function update(dt) {
   if (G.state === 'break') { G.breakT -= dt; if (G.breakT <= 0) startRound(); }
   else {
     G.spawnT -= dt;
-    const maxAlive = 24;
+    // zombies vivos a la vez: 24 + 6 por cada jugador extra (2 = 30, 3 = 36, 4 = 42)
+    const maxAlive = 24 + 6 * Math.max(0, G.players.filter(p => !p.left).length - 1);
     if (G.toSpawn > 0 && G.spawnT <= 0 && G.zombies.length < maxAlive) { if (spawnZombie()) G.toSpawn--; G.spawnT = Math.max(.5, 2.2 - G.round * .15); }
     if (G.toSpawn <= 0 && G.zombies.length === 0) { G.state = 'break'; G.breakT = 9; sfx('roundEnd'); }
   }
@@ -1359,7 +1438,7 @@ function createRoom() {
   });
 }
 function roomList() { return room.map(r => ({ name: r.name, ch: r.ch })); }
-function syncLobby() { room.forEach((r, i) => r.conn && send(r.conn, { t: 'welcome', idx: i })); broadcast({ t: 'lobby', list: roomList(), code: roomCode }); renderLobby(); }
+function syncLobby() { room.forEach((r, i) => r.conn && send(r.conn, { t: 'welcome', idx: i })); broadcast({ t: 'lobby', list: roomList(), code: roomCode, map: mapSel }); renderLobby(); }
 function hostOnData(c, m) {
   if (!m || !m.t) return;
   if (m.t === 'join') {
@@ -1380,7 +1459,7 @@ function hostOnData(c, m) {
     }
     send(c, { t: 'welcome', idx: i });
     if (phase === 'lobby') syncLobby();
-    else if (G) { send(c, { t: 'start', list: G.players.map(p => ({ name: p.name, ch: p.ch })) }); if (phase === 'over') send(c, { t: 'over', d: { r: G.round, pl: G.players.map(p => ({ n: p.name, k: p.kills, c: p.ch })) } }); }
+    else if (G) { send(c, { t: 'start', list: G.players.map(p => ({ name: p.name, ch: p.ch })), map: mapId }); if (phase === 'over') send(c, { t: 'over', d: { r: G.round, pl: G.players.map(p => ({ n: p.name, k: p.kills, c: p.ch })) } }); }
     else syncLobby();
     return;
   }
@@ -1409,8 +1488,8 @@ function hostStart() {
   room.forEach((r, i) => r.conn && send(r.conn, { t: 'welcome', idx: i }));
   const list = roomList();
   RIN.length = 0; evQ = { fx: [], tr: [], bl: [] }; sndQ = [];
-  ensureAudio(); newGame(list); phase = 'play'; show(null);
-  broadcast({ t: 'start', list });
+  ensureAudio(); buildMap(mapSel); newGame(list); phase = 'play'; show(null);
+  broadcast({ t: 'start', list, map: mapId });
 }
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
 function buildSnap() {
@@ -1460,10 +1539,10 @@ function connectHost() {
 function guestOnData(m) {
   if (!m || !m.t) return;
   if (m.t === 'welcome') { myIdx = m.idx; if (phase === 'menu') { phase = 'lobby'; show('lobby'); setStatus(''); } }
-  else if (m.t === 'lobby') { roomCode = m.code || roomCode; renderLobby(m.list); }
+  else if (m.t === 'lobby') { roomCode = m.code || roomCode; if (m.map !== undefined) mapSel = m.map | 0; renderLobby(m.list); }
   else if (m.t === 'full') { leaveNet(true); setStatus('La sala está llena (máximo 4)'); }
   else if (m.t === 'bye') leaveNet(false, 'El anfitrión cerró la sala');
-  else if (m.t === 'start') { newGame(m.list); phase = 'play'; show(null); }
+  else if (m.t === 'start') { buildMap(m.map | 0); newGame(m.list); phase = 'play'; show(null); }
   else if (m.t === 'over') { phase = 'over'; showOver(m.d); }
   else if (m.t === 'pong') ping = Math.round(performance.now() - m.t0);
   else if (m.t === 's' && G && phase === 'play') applySnap(m);
@@ -1583,14 +1662,30 @@ function renderLobby(list) {
   $('lobbyList').innerHTML = list.map((p, i) => `<div class="pl"><span style="color:${CHARS[p.ch].c}">■</span> ${esc(p.name)}${i === 0 ? ' <small>(anfitrión)</small>' : ''}${i === myIdx ? ' <small>(tú)</small>' : ''}</div>`).join('')
     + Array.from({ length: 4 - list.length }, () => '<div class="pl empty">· libre ·</div>').join('');
   $('bStart').classList.toggle('hidden', !isHost);
+  syncMapPick();
   $('lobbyStatus').textContent = isHost ? (list.length > 1 ? '¡Listos! Empieza cuando quieran.' : 'Esperando amigos… (puedes empezar solo)') : 'Esperando a que el anfitrión empiece…';
 }
-function play() { ensureAudio(); leaveNet(true); newGame(); phase = 'play'; show(null); }
+function play() { ensureAudio(); leaveNet(true); buildMap(mapSel); newGame(); phase = 'play'; show(null); }
 function retry() { if (netOn && isHost) hostStart(); else play(); }
 $('bPlay').onclick = play; $('bRetry').onclick = retry;
 $('bCreate').onclick = createRoom; $('bJoin').onclick = joinRoom;
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
 $('bStart').onclick = hostStart;
+// elegir mapa: en el menú (para jugar solo) y en la sala (solo el anfitrión)
+function mapLabel() { return 'Mapa ' + (mapSel + 1) + ' · ' + MAPS[mapSel].n; }
+function syncMapPick() {
+  $('bMapSel').textContent = '🗺 ' + mapLabel() + ' ▸';
+  $('bLobbyMap').textContent = '🗺 ' + mapLabel() + ' ▸';
+  $('bLobbyMap').classList.toggle('hidden', !isHost);
+  $('lobbyMap').textContent = mapLabel();
+  $('lobbyMap').classList.toggle('hidden', isHost);
+}
+function nextMap() {
+  mapSel = (mapSel + 1) % MAPS.length; try { localStorage.setItem('fdm-map', mapSel); } catch (e) { }
+  if (netOn && isHost && phase === 'lobby') syncLobby(); else syncMapPick();
+}
+$('bMapSel').onclick = nextMap; $('bLobbyMap').onclick = nextMap;
+syncMapPick();
 $('bMap').onclick = () => { ensureAudio(); toggleMap(); };
 $('bStk').addEventListener('pointerdown', e => { e.preventDefault(); ensureAudio(); sendSticker(); });
 $('rBox').onclick = () => setRoute('box'); $('rPot').onclick = () => setRoute('potion'); $('rPap').onclick = () => setRoute('pap');

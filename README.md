@@ -13,9 +13,13 @@ Una vez instalado abre en pantalla completa y el modo solo funciona sin internet
 ## Jugar con amigos
 1. Uno toca **Crear sala** y comparte el código o el enlace.
 2. Los demás escriben el código (o abren el enlace) y tocan **Unirse**.
-3. El anfitrión toca **¡Que empiece la función!**
+3. El anfitrión elige el mapa y toca **¡Que empiece la función!**
 
 Si caes tienes 30 s para que un compañero te reviva manteniendo ACCIÓN junto a ti.
+
+## Mapas
+- **Mapa 1 · Teatro:** salas grandes unidas por puertas anchas.
+- **Mapa 2 · Bambalinas:** salas chicas unidas por pasillos angostos, con una sola sala grande al centro.
 
 ## Controles
 - **Laptop:** WASD mover · ratón apuntar · clic disparar · E acción · R recargar · F cuchillo · Q cambiar arma
