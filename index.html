@@ -46,6 +46,16 @@
   #tKnife{right:max(20px,env(safe-area-inset-right));bottom:160px;background:#cfcfcf}
   #tSwap{right:max(84px,calc(env(safe-area-inset-right) + 70px));bottom:178px;background:#b78cff}
   #fs{position:fixed;top:6px;right:6px;z-index:20;font-size:12px;padding:5px 8px;margin:0;width:auto;background:#4a2e3a;box-shadow:2px 2px 0 #000}
+  .row{display:flex;gap:8px;align-items:center}
+  .row>*{flex:1;min-width:0}
+  #code{font-family:inherit;border:3px solid #000;background:#f4e6d0;color:#24141c;font-size:12px;padding:11px 4px;text-align:center;text-transform:uppercase;letter-spacing:3px;width:100%;margin:6px 0}
+  button.alt{background:#3a5ab8;box-shadow:inset -3px -3px 0 #24387a,3px 3px 0 #000}
+  .status{min-height:14px;color:var(--yel);font-size:8px}
+  .code{font-size:30px;letter-spacing:8px;color:var(--yel);text-shadow:3px 3px 0 #000;margin:6px 0}
+  #lobbyList{margin:10px 0;text-align:left}
+  .pl{font-size:9px;padding:7px 8px;background:#160c12;margin:4px 0;box-shadow:2px 2px 0 #000}
+  .pl small{font-size:7px;color:#a88}
+  .pl.empty{color:#5a4048}
   #ver{position:fixed;left:50%;transform:translateX(-50%);bottom:max(3px,env(safe-area-inset-bottom));z-index:20;font-size:7px;color:var(--yel);opacity:.6;pointer-events:none}
 </style>
 </head>
@@ -70,9 +80,16 @@
       style="font-family:inherit;width:100%;border:3px solid #000;background:#f4e6d0;color:#24141c;font-size:12px;padding:10px;text-align:center;margin-bottom:10px">
     <p>Elige tu superviviente</p>
     <div class="chars" id="chars"></div>
-    <button id="bPlay">Jugar</button>
-    <button id="bHelp" class="small">¿Cómo se juega?</button>
-    <p style="color:#a88">Multijugador para 4: próximamente</p>
+    <button id="bCreate">Crear sala (hasta 4)</button>
+    <div class="row">
+      <input id="code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters">
+      <button id="bJoin" class="alt">Unirse</button>
+    </div>
+    <div class="row">
+      <button id="bPlay" class="small">Jugar solo</button>
+      <button id="bHelp" class="small">¿Cómo se juega?</button>
+    </div>
+    <p id="status" class="status"></p>
   </div>
 </div>
 
@@ -86,7 +103,8 @@
       Repara las <b>ventanas</b> manteniendo ACCIÓN cerca.<br>
       Enciende la <b>luz</b> en la azotea para usar la <b>trampilla</b>, las <b>pociones</b> y la <b>máquina dorada</b>.<br>
       <b>Baúl misterioso</b> (950): arma al azar. Si sale la paloma, se muda de sala.<br>
-      <b>Pociones:</b> Soda Coraza (más vida) · Palomitas Turbo (recarga) · Jugo Ángel (te levanta una vez) · Paleta Veloz (corres más).<br>
+      <b>Pociones:</b> Soda Coraza (más vida) · Palomitas Turbo (recarga) · Jugo Ángel (solo: te levanta una vez · en equipo: revives el doble de rápido) · Paleta Veloz (corres más).<br>
+      <b>En equipo:</b> si caes tienes 30 s; un compañero te revive manteniendo ACCIÓN junto a ti. Si te desangras, vuelves la siguiente ronda con pistola.<br>
       <b>Máquina dorada</b> (5000, sótano): mejora tu arma.<br>
       Los zombies a veces sueltan <b>premios</b>: munición máxima, doble puntos, golpe mortal y bomba.<br><br>
       <b>Laptop:</b> WASD mover · ratón apuntar · clic disparar · E acción · R recargar · F cuchillo · Q cambiar arma<br>
@@ -97,15 +115,30 @@
   </div>
 </div>
 
+<div id="lobby" class="ov hidden">
+  <div class="panel">
+    <h2>SALA</h2>
+    <p>Código de la sala:</p>
+    <div class="code" id="roomCode">----</div>
+    <button id="bShare" class="small">Invitar amigos 📨</button>
+    <div id="lobbyList"></div>
+    <p class="status" id="lobbyStatus"></p>
+    <button id="bStart" class="hidden">¡Que empiece la función!</button>
+    <button id="bLeave" class="small">Salir</button>
+  </div>
+</div>
+
 <div id="over" class="ov hidden">
   <div class="panel">
     <h2>FIN DE LA FUNCIÓN</h2>
     <p id="overTxt"></p>
     <button id="bRetry">Otra vez</button>
+    <p class="status" id="overWait"></p>
     <button id="bMenu" class="small">Menú</button>
   </div>
 </div>
 
-<script src="game.js?v=4"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="game.js?v=5"></script>
 </body>
 </html>

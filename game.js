@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v4 · fase 2 + zombies listos';
+const VERSION = 'v5 · fase 3 en línea';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -137,14 +137,23 @@ CHARS.forEach((c, i) => mk('p' + i, PROWS, { h: c.h, s: '#ffcfa8', k: '#2a1a22',
 
 /* ============================ ESTADO ============================ */
 let G = null, myChar = 0, phase = 'menu';
-function newGame() {
+// red: el anfitrión simula todo; los invitados mandan su posición y botones
+let isHost = true, myIdx = 0, netOn = false;
+let evQ = { fx: [], tr: [], bl: [] }, sndQ = [];
+const alive = p => p && !p.down && !p.dead && !p.left;
+function addFx(f) { G.fx.push(f); if (isHost && netOn && evQ.fx.length < 80) evQ.fx.push(f); }
+function addTr(t) { G.tracers.push(t); if (isHost && netOn) evQ.tr.push(t); }
+function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn) evQ.bl.push(b); }
+function newGame(list) {
+  list = list || [{ name: myName(), ch: myChar }];
   G = {
     round: 0, state: 'break', breakT: 4, toSpawn: 0, spawnT: 0, power: false,
     roomOpen: ROOMS.map((_, i) => i === 0), zombies: [], fx: [], blood: [], tracers: [], banner: 0, flowT: 0,
-    players: [newPlayer(myChar, myName())],
+    players: list.map((l, i) => { const p = newPlayer(l.ch, l.name); p.idx = i; p.x += [0, 16, -16, 0][i]; p.y += [0, 0, 0, 16][i]; return p; }),
+    solo: list.length === 1, over: null,
     box: { loc: Math.floor(Math.random() * BOX_LOCS.length), st: 'idle', t: 0, gun: null, show: '', uses: 0, minUses: 4 + Math.floor(Math.random() * 4), owner: null },
     pap: { st: 'idle', t: 0, owner: null, gid: null },
-    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0,
+    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0, zid: 0,
   };
   DOORS.forEach(d => { d.open = false; d.tiles.forEach(([x, y]) => setT(x, y, DOOR)); });
   WINDOWS.forEach(w => { w.boards = 6; });
@@ -152,7 +161,7 @@ function newGame() {
 function newPlayer(ch, name) {
   return {
     ch, name: name || CHARS[ch].n, x: START.x, y: START.y, aim: 0, hp: 100, maxHp: 100, hurtT: 9, pts: 500, kills: 0, down: false,
-    potions: [], invT: 0,
+    potions: [], invT: 0, idx: 0, tp: 0, bleed: 0, revT: 0, revBy: -1, dead: false, left: false,
     guns: [gun('pistola')], cur: 0, cool: 0, relT: 0, knifeT: 0, knifeAnim: 0, repT: 0, trapT: 0, flash: 0, mv: false, face: 1,
   };
 }
@@ -201,7 +210,9 @@ const SFX = {
   pap: () => { for (let i = 0; i < 6; i++) tone(200 + i * 40, .3, 'sawtooth', .04, 0, i * .45); },
   drop: () => { tone(784, .1, 'square', .05); tone(1047, .1, 'square', .05, 0, .1); tone(1568, .25, 'square', .05, 0, .2); },
 };
-const sfx = n => SFX[n] && SFX[n]();
+const play_ = n => SFX[n] && SFX[n]();
+// el anfitrión también manda los sonidos a los invitados (sin repetir los muy seguidos)
+const sfx = n => { if (!isHost) return; play_(n); if (netOn && sndQ.length < 24) sndQ.push(n); };
 
 /* ============================ FÍSICA ============================ */
 const pSolid = t => t !== FLOOR;
@@ -220,7 +231,7 @@ const DIST = new Int16Array(MW * MH), Q = new Int32Array(MW * MH);
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]], N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 function flowField() {
   DIST.fill(-1); let h = 0, t = 0;
-  G.players.forEach(p => { if (!p.down) { const i = idx(Math.floor(p.x / TS), Math.floor(p.y / TS)); if (DIST[i] < 0) { DIST[i] = 0; Q[t++] = i; } } });
+  G.players.forEach(p => { if (alive(p)) { const i = idx(Math.floor(p.x / TS), Math.floor(p.y / TS)); if (DIST[i] < 0) { DIST[i] = 0; Q[t++] = i; } } });
   while (h < t) {
     const i = Q[h++], x = i % MW, y = (i / MW) | 0, d = DIST[i] + 1;
     for (const [dx, dy] of N4) { const j = idx(x + dx, y + dy); if (DIST[j] < 0 && tiles[j] === FLOOR) { DIST[j] = d; Q[t++] = j; } }
@@ -231,7 +242,13 @@ function flowField() {
 const roundTotal = r => Math.round(4 + r * 3 + r * r * .3);
 const zombieHp = r => r < 10 ? 100 + 80 * (r - 1) : Math.round(820 * Math.pow(1.1, r - 9));
 function startRound() {
-  G.round++; G.dropsRound = 0; G.toSpawn = roundTotal(G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
+  G.round++; G.dropsRound = 0; G.toSpawn = roundTotal(G.round) + (G.players.filter(p => !p.left).length - 1) * (2 + G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
+  // los que se desangraron vuelven con pistola junto a un compañero
+  const a = G.players.find(alive);
+  if (a) for (const p of G.players) if (p.dead && !p.left) {
+    Object.assign(p, { dead: false, down: false, hp: 100, maxHp: 100, guns: [gun('pistola')], cur: 0, relT: 0, potions: [], invT: 3, x: a.x, y: a.y, revT: 0 });
+    p.tp++; flash('¡' + p.name.toUpperCase() + ' VOLVIÓ!');
+  }
 }
 // ¿se ve en línea recta de (x1,y1) a (x2,y2)? (las butacas no tapan la vista)
 function sees(x1, y1, x2, y2) {
@@ -255,7 +272,7 @@ const VISION = 170;
 // ventana para atacar: de las más cercanas a los jugadores (al azar entre las 3 mejores),
 // sin salir justo encima de alguien
 function pickWindow() {
-  const live = G.players.filter(p => !p.down);
+  const live = G.players.filter(alive);
   const open = WINDOWS.filter(w => G.roomOpen[w.room]).map(w => ({ w, d: Math.min(...live.map(p => Math.hypot(p.x - w.px, p.y - w.py))) }))
     .filter(o => o.d > 56).sort((a, b) => a.d - b.d);
   if (!open.length) { const any = WINDOWS.filter(w => G.roomOpen[w.room]); return any.length ? any[Math.floor(Math.random() * any.length)] : null; }
@@ -272,7 +289,7 @@ function spawnZombie() {
   let sp = 20 + Math.random() * 6;
   if (r >= 3 && roll < Math.min(.85, (r - 2) * .14)) sp = 38 + Math.random() * 8;
   if (r >= 6 && roll < Math.min(.45, (r - 5) * .08)) sp = 56 + Math.random() * 6;
-  G.zombies.push({ x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r), sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
+  G.zombies.push({ id: ++G.zid, x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r), sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
   return true;
 }
 function updateZombies(dt) {
@@ -283,7 +300,7 @@ function updateZombies(dt) {
     if (z.st === 'out') {
       const w = z.w;
       // esperando en una ventana lejos de todos: se cambia a una ventana más cercana
-      const near = Math.min(...G.players.filter(p => !p.down).map(p => Math.hypot(p.x - w.px, p.y - w.py)));
+      const near = Math.min(...G.players.filter(alive).map(p => Math.hypot(p.x - w.px, p.y - w.py)));
       if (near > 230) { z.unseen = (z.unseen || 0) + dt; if (z.unseen > 7) { respawnNear(z); continue; } } else z.unseen = 0;
       if (w.boards > 0) {
         const d = Math.hypot(w.ox - z.x, w.oy - z.y);
@@ -298,11 +315,11 @@ function updateZombies(dt) {
     }
     // dentro: si ve a alguien, va por el jugador visible más cercano; si no, sigue el camino más corto
     let tp = null, td = 1e12, vis = false;
-    for (const p of G.players) {
-      if (p.down) continue; const d = dist2(p.x, p.y, z.x, z.y);
+    for (const p of G.players) { if (p.dead || p.left) continue;
+      if (!alive(p)) continue; const d = dist2(p.x, p.y, z.x, z.y);
       if (d < VISION * VISION && d < td && sees(z.x, z.y, p.x, p.y)) { td = d; tp = p; vis = true; }
     }
-    if (!tp) for (const p of G.players) { if (p.down) continue; const d = dist2(p.x, p.y, z.x, z.y); if (d < td) { td = d; tp = p; } }
+    if (!tp) for (const p of G.players) { if (!alive(p)) continue; const d = dist2(p.x, p.y, z.x, z.y); if (d < td) { td = d; tp = p; } }
     if (!tp) continue;
     // si nadie lo ve y está lejos, reaparece por una ventana cerca de los jugadores (otra ruta)
     if (!vis && td > 210 * 210) { z.unseen = (z.unseen || 0) + dt; if (z.unseen > 6) { respawnNear(z); continue; } } else z.unseen = 0;
@@ -343,25 +360,29 @@ function updateZombies(dt) {
   G.zombies = zs.filter(z => !z.dead);
 }
 function playerDown(p) {
-  if (hasPot(p, 'angel')) {          // Jugo Ángel: te levanta una vez y pierdes las pociones
+  if (G.solo && hasPot(p, 'angel')) {   // solo: Jugo Ángel te levanta una vez y pierdes las pociones
     p.potions = []; p.maxHp = 100; p.hp = 100; p.invT = 3; sfx('power'); flash('¡JUGO ÁNGEL TE LEVANTÓ!');
     for (const z of G.zombies) { const d = Math.hypot(z.x - p.x, z.y - p.y); if (z.st === 'in' && d < 40 && d > 0) move(z, (z.x - p.x) / d * 30, (z.y - p.y) / d * 30, 1, zSolid, 4); }
     return;
   }
-  p.hp = 0; p.down = true; p.potions = [];
+  // en equipo: quedas en el suelo 30 s esperando que te revivan (puedes disparar con la pistola)
+  p.hp = 0; p.down = true; p.potions = []; p.maxHp = 100; p.bleed = 30; p.revT = 0; p.relT = 0;
+  if (!G.solo) flash(p.name.toUpperCase() + ' CAYÓ, ¡REVÍVELO!');
+}
+function revive(p) {
+  p.down = false; p.hp = 100; p.maxHp = 100; p.invT = 2; p.revT = 0; sfx('power'); flash('¡' + p.name.toUpperCase() + ' DE VUELTA!');
 }
 function hurtZombie(z, dmg, p, knife) {
   if (G.killT > 0) dmg = 1e9;
   z.hp -= dmg; z.flash = .08; addPts(p, 10);
-  for (let i = 0; i < 3; i++) G.fx.push({ x: z.x, y: z.y - 2, vx: (Math.random() - .5) * 60, vy: (Math.random() - .5) * 60, l: .35, c: '#a01020' });
+  for (let i = 0; i < 3; i++) addFx({ x: z.x, y: z.y - 2, vx: (Math.random() - .5) * 60, vy: (Math.random() - .5) * 60, l: .35, c: '#a01020' });
   if (z.hp <= 0 && !z.dead) {
     z.dead = true; addPts(p, knife ? 120 : 50); p.kills++; sfx('kill');
     if (z.st === 'in' && G.dropsRound < 4 && Math.random() < .03) {
       const types = Object.keys(DROPS); G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 25 }); G.dropsRound++;
     }
-    if (G.blood.length > 160) G.blood.shift();
-    G.blood.push({ x: z.x + (Math.random() * 6 - 3), y: z.y + 4, s: 3 + Math.random() * 4 });
-    G.fx.push({ k: 'corpse', x: z.x, y: z.y, l: .6, face: z.face });
+    addBlood({ x: z.x + (Math.random() * 6 - 3), y: z.y + 4, s: 3 + Math.random() * 4 });
+    addFx({ k: 'corpse', x: z.x, y: z.y, l: .6, face: z.face });
   } else sfx('hit');
 }
 
@@ -379,8 +400,8 @@ function ray(x, y, a, range) {
   return { hit, t: ht, wallT, all };
 }
 function explode(x, y, R, dmg, p) {
-  sfx('boom'); G.fx.push({ k: 'boom', x, y, l: .3, R });
-  for (let i = 0; i < 14; i++) G.fx.push({ x, y, vx: (Math.random() - .5) * 140, vy: (Math.random() - .5) * 140, l: .5, c: ['#ff7eb6', '#ffc93c', '#5b8cff', '#4caf3a'][i % 4] });
+  sfx('boom'); addFx({ k: 'boom', x, y, l: .3, R });
+  for (let i = 0; i < 14; i++) addFx({ x, y, vx: (Math.random() - .5) * 140, vy: (Math.random() - .5) * 140, l: .5, c: ['#ff7eb6', '#ffc93c', '#5b8cff', '#4caf3a'][i % 4] });
   for (const z of G.zombies) if (!z.dead && Math.hypot(z.x - x, z.y - y) < R) hurtZombie(z, dmg, p, false);
 }
 function shoot(p) {
@@ -393,7 +414,7 @@ function shoot(p) {
     const a = p.aim + (Math.random() - .5) * 2 * W.spread;
     const r = ray(ox, oy, a, W.range);
     const end = W.pierce ? r.wallT : r.t;
-    G.tracers.push({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#ffd84a' : null });
+    addTr({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#ffd84a' : null });
     if (W.explode) explode(ox + Math.cos(a) * r.t, oy + Math.sin(a) * r.t, W.explode, W.dmg, p);
     else if (W.pierce) r.all.forEach(z => { hurtZombie(z, W.dmg, p, false); if (W.slow) z.slowT = 2.5; });
     else if (r.hit) hurtZombie(r.hit, W.dmg, p, false);
@@ -430,6 +451,9 @@ function openRoom(r) {
 }
 // lo que el jugador tiene cerca para usar con ACCIÓN
 function interactable(p) {
+  if (!alive(p)) return null;
+  for (const o of G.players) if (o !== p && o.down && !o.dead && !o.left && dist2(p.x, p.y, o.x, o.y) < 18 * 18)
+    return { k: 'revive', o, txt: 'Mantén para revivir a ' + o.name };
   for (let id = 0; id < DOORS.length; id++) {
     const d = DOORS[id]; if (d.open) continue;
     for (const [tx, ty] of d.tiles) if (dist2(p.x, p.y, tx * TS + 8, ty * TS + 8) < 24 * 24) return { k: 'door', d, txt: `Abrir puerta [${d.cost}]`, cost: d.cost };
@@ -446,14 +470,14 @@ function interactable(p) {
   const bx = BOX_LOCS[G.box.loc];
   if (G.roomOpen[bx.room] && dist2(p.x, p.y, bx.x, bx.y) < 20 * 20) {
     if (G.box.st === 'idle') return { k: 'box', txt: 'Baúl misterioso [950]', cost: 950 };
-    if (G.box.st === 'ready' && G.box.owner === p) return { k: 'boxTake', txt: 'Tomar ' + WEAPONS[G.box.gun].n };
+    if (G.box.st === 'ready' && G.box.owner === p.idx) return { k: 'boxTake', txt: 'Tomar ' + WEAPONS[G.box.gun].n };
   }
   // máquina de mejora
   if (dist2(p.x, p.y, PAP.x, PAP.y) < 22 * 22) {
     if (!G.power) return { k: 'none', txt: 'La máquina necesita luz' };
     const g = p.guns[p.cur];
     if (G.pap.st === 'idle') return g.up ? { k: 'none', txt: 'Esta arma ya es dorada' } : { k: 'pap', txt: `Mejorar ${WEAPONS[g.id].n} [${PAP.cost}]`, cost: PAP.cost };
-    if (G.pap.st === 'ready' && G.pap.owner === p) return { k: 'papTake', txt: 'Tomar arma dorada' };
+    if (G.pap.st === 'ready' && G.pap.owner === p.idx) return { k: 'papTake', txt: 'Tomar arma dorada' };
   }
   // pociones
   for (const po of POTIONS) if (dist2(p.x, p.y, po.x, po.y) < 18 * 18) {
@@ -466,8 +490,13 @@ function interactable(p) {
   for (const w of WINDOWS) if (w.boards < 6 && dist2(p.x, p.y, w.ix, w.iy) < 22 * 22) return { k: 'repair', w, txt: 'Mantén para reparar' };
   return null;
 }
-function action(p, pressed) {
+function action(p, pressed, dt) {
   const it = interactable(p); if (!it) return;
+  if (it.k === 'revive') {          // con Jugo Ángel revives el doble de rápido
+    it.o.revT += (dt || 0) * (hasPot(p, 'angel') ? 2 : 1); it.o.revBy = p.idx; it.o._rev = true;
+    if (it.o.revT >= 3) { revive(it.o); addPts(p, 100); }
+    return;
+  }
   if (it.k === 'repair') {
     if (p.repT <= 0) { it.w.boards++; p.pts += 10; p.repT = .45; sfx('board'); }
     return;
@@ -485,11 +514,11 @@ function action(p, pressed) {
     if (g.res >= W.res && g.ammo >= W.mag) { sfx('no'); return; }
     p.pts -= it.cost; g.res = W.res; sfx('buy');
   } else if (it.k === 'box') {
-    p.pts -= it.cost; const b = G.box; b.st = 'spin'; b.t = 3; b.uses++; b.owner = p; sfx('box');
+    p.pts -= it.cost; const b = G.box; b.st = 'spin'; b.t = 3; b.uses++; b.owner = p.idx; sfx('box');
   } else if (it.k === 'boxTake') {
     giveGun(p, gun(G.box.gun)); G.box.st = 'idle'; G.box.gun = null; sfx('buy');
   } else if (it.k === 'pap') {
-    p.pts -= it.cost; G.pap = { st: 'work', t: 3.5, owner: p, gid: p.guns[p.cur].id }; sfx('pap');
+    p.pts -= it.cost; G.pap = { st: 'work', t: 3.5, owner: p.idx, gid: p.guns[p.cur].id }; sfx('pap');
   } else if (it.k === 'papTake') {
     const g = p.guns.find(o => o.id === G.pap.gid);
     if (g) giveGun(p, gun(g.id, true)); else giveGun(p, gun(G.pap.gid, true));
@@ -501,11 +530,21 @@ function action(p, pressed) {
   } else if (it.k === 'switch') {
     G.power = true; sfx('power'); G.banner = -2.5;
   } else if (it.k === 'trap' && p.trapT <= 0) {
-    const to = TRAPS[it.tr.to]; p.x = to.x; p.y = to.y + 14; p.trapT = 1; sfx('trap'); openRoom(to.room);
+    const to = TRAPS[it.tr.to]; p.x = to.x; p.y = to.y + 14; p.trapT = 1; p.tp++; sfx('trap'); openRoom(to.room);
   }
 }
 function updatePlayer(p, inp, dt) {
-  if (p.down) return;
+  if (p.dead || p.left) return;
+  // invitado: su posición la manda su dispositivo (salvo justo después de un teletransporte)
+  if (inp.pos && inp.tp === p.tp && !p.down) { p.x = inp.pos[0]; p.y = inp.pos[1]; p.mv = inp.mv; }
+  if (p.down) {                     // en el suelo: solo apuntar y disparar
+    p.cool -= dt; p.flash -= dt; p.aim = inp.aim;
+    if (p.relT > 0) { p.relT -= dt; if (p.relT <= 0) { const g = p.guns[p.cur], W = wstat(g), n = Math.min(W.mag - g.ammo, g.res); g.ammo += n; g.res -= n; } }
+    const W = wstat(p.guns[p.cur]);
+    if (inp.fire && (W.auto || inp.firePressed)) shoot(p);
+    if (inp.reload) reload(p);
+    return;
+  }
   p.cool -= dt; p.knifeT -= dt; p.knifeAnim -= dt; p.repT -= dt; p.trapT -= dt; p.flash -= dt; p.hurtT += dt;
   if (p.relT > 0) {
     p.relT -= dt;
@@ -513,10 +552,12 @@ function updatePlayer(p, inp, dt) {
   }
   p.invT -= dt;
   if (p.hurtT > 3 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 60 * dt);
-  let [vx, vy] = [inp.mx, inp.my];
-  p.mv = !!(vx || vy);
-  const spd = hasPot(p, 'veloz') ? 88 : 70;
-  if (p.mv) move(p, vx * spd, vy * spd, dt, pSolid, 4);
+  if (!inp.pos) {
+    const [vx, vy] = [inp.mx, inp.my];
+    p.mv = !!(vx || vy);
+    const spd = hasPot(p, 'veloz') ? 88 : 70;
+    if (p.mv) move(p, vx * spd, vy * spd, dt, pSolid, 4);
+  }
   p.aim = inp.aim;
   // recoger premios
   for (const d of G.drops) if (!d.taken && Math.hypot(d.x - p.x, d.y - p.y) < 12) { d.taken = true; takeDrop(d.k, p); }
@@ -525,7 +566,7 @@ function updatePlayer(p, inp, dt) {
   if (inp.reload) reload(p);
   if (inp.knife) knife(p);
   if (inp.swap) swap(p);
-  if (inp.act) action(p, inp.actPressed);
+  if (inp.act) action(p, inp.actPressed, dt);
 }
 
 /* ============================ ENTRADA ============================ */
@@ -758,9 +799,11 @@ function render() {
   ctx.setTransform(S, 0, 0, S, 0, 0); ctx.imageSmoothingEnabled = false;
   r(0, 0, VW, VH, '#0b0810');
   if (!G) return;
-  const me = G.players[0];
-  cam.x = Math.round(Math.max(0, Math.min(MW * TS - VW, me.x - VW / 2)));
-  cam.y = Math.round(Math.max(0, Math.min(MH * TS - VH, me.y - VH / 2)));
+  const me = G.players[myIdx] || G.players[0];
+  // si te desangraste, la cámara sigue a un compañero vivo
+  const camP = me.dead || me.left ? (G.players.find(alive) || me) : me;
+  cam.x = Math.round(Math.max(0, Math.min(MW * TS - VW, camP.x - VW / 2)));
+  cam.y = Math.round(Math.max(0, Math.min(MH * TS - VH, camP.y - VH / 2)));
   ctx.save(); ctx.translate(-cam.x, -cam.y);
   const x0 = Math.floor(cam.x / TS), y0 = Math.floor(cam.y / TS);
   for (let y = y0; y <= y0 + VH / TS + 1; y++) for (let x = x0; x <= x0 + VW / TS + 1; x++) drawTile(x, y, x * TS, y * TS);
@@ -786,7 +829,7 @@ function render() {
   // entidades ordenadas por y
   const ents = [];
   G.zombies.forEach(z => ents.push([z.y, 'z', z]));
-  G.players.forEach((p, i) => ents.push([p.y, 'p', p, i]));
+  G.players.forEach((p, i) => { if (!p.dead && !p.left) ents.push([p.y, 'p', p, i]); });
   G.fx.forEach(f => { if (f.k === 'corpse') ents.push([f.y - 1, 'c', f]); });
   ents.sort((a, b) => a[0] - b[0]);
   for (const [, k, e] of ents) {
@@ -806,6 +849,12 @@ function render() {
       ctx.globalAlpha = 1;
       if (!e.down) drawGunInHand(e, X, Y - 1 - bob);
       text(e.name, X, Y - 17, CHARS[e.ch].c, 6, 'center');
+      if (e.down) {   // barra: verde = lo están reviviendo, roja = tiempo antes de desangrarse
+        r(X - 9, Y - 23, 18, 3, '#000');
+        if (e.revT > 0) r(X - 8, Y - 22, Math.round(16 * Math.min(1, e.revT / 3)), 1, '#4caf3a');
+        else r(X - 8, Y - 22, Math.round(16 * Math.max(0, e.bleed / 30)), 1, '#e8443a');
+        if (Math.floor(performance.now() / 400) % 2) text('¡AYUDA!', X, Y - 31, '#ff6b6b', 6, 'center');
+      }
     }
   }
   // trazos de bala y partículas
@@ -822,12 +871,19 @@ function render() {
   dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, VW, VH);
   dctx.fillStyle = G.power ? 'rgba(6,3,10,.38)' : 'rgba(6,3,10,.78)'; dctx.fillRect(0, 0, VW, VH);
   dctx.globalCompositeOperation = 'destination-out';
-  for (const p of G.players) {
+  for (const p of G.players) { if (p.dead || p.left) continue;
     const sx = p.x - cam.x, sy = p.y - cam.y, R = G.power ? 120 : 82 + (p.flash > 0 ? 20 : 0);
     const g = dctx.createRadialGradient(sx, sy, 8, sx, sy, R); g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
     dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, R, 0, Math.PI * 2); dctx.fill();
   }
   ctx.drawImage(dark, 0, 0);
+  // compañeros caídos fuera de la pantalla: flecha roja en el borde
+  for (const o of G.players) if (o !== me && o.down && !o.dead && !o.left) {
+    const sx = o.x - cam.x, sy = o.y - cam.y;
+    if (sx > 0 && sy > 0 && sx < VW && sy < VH) continue;
+    const ex = Math.max(8, Math.min(VW - 8, sx)), ey = Math.max(30, Math.min(VH - 30, sy));
+    r(ex - 3, ey - 3, 6, 6, '#000'); r(ex - 2, ey - 2, 4, 4, Math.floor(performance.now() / 300) % 2 ? '#ff4040' : '#ffc93c');
+  }
   drawHUD(me);
 }
 function drawHUD(p) {
@@ -856,15 +912,34 @@ function drawHUD(p) {
     ctx.globalAlpha = Math.min(1, -G.banner); text('¡SE HIZO LA LUZ!', VW / 2, 40, '#ffc93c', 10, 'center'); ctx.globalAlpha = 1;
   }
   if (padToast > 0) text('Control conectado', VW / 2, 18, '#8fd0ff', 6, 'center');
+  // compañeros (puntos y estado)
+  if (!G.solo) G.players.forEach((o, i) => {
+    if (o === p) return;
+    const st = o.left ? ' DESCON.' : o.dead ? ' FUERA' : o.down ? ' CAÍDO ' + Math.ceil(o.bleed) : '';
+    text(o.name + ' ' + o.pts + st, VW - 6, 17 + (i - (i > p.idx ? 1 : 0)) * 8, o.down ? '#ff6b6b' : o.dead || o.left ? '#888' : CHARS[o.ch].c, 6, 'right');
+  });
+  if (p.down) text('¡CAÍSTE! QUE TE REVIVAN · ' + Math.ceil(p.bleed), VW / 2, 50, '#ff6b6b', 6, 'center');
+  if (p.dead) text('TE DESANGRASTE · VUELVES LA PRÓXIMA RONDA', VW / 2, 50, '#ff6b6b', 6, 'center');
+  if (netOn && !isHost) {
+    const lag = performance.now() - lastRx;
+    if (lag > 1500) text('RECONECTANDO…', VW / 2, 26, '#ff6b6b', 6, 'center');
+    else text(ping + 'ms', VW / 2, 6, ping < 120 ? '#4caf3a' : ping < 250 ? '#ffc93c' : '#ff6b6b', 6, 'center');
+  }
   const room = roomAt[idx(Math.floor(p.x / TS), Math.floor(p.y / TS))];
   if (room >= 0) text(ROOMS[room].n, 6, 6, 'rgba(244,230,208,.7)', 6);
 }
 
 /* ============================ BUCLE ============================ */
 function update(dt) {
-  if (phase !== 'play') return;
-  const p = G.players[0];
-  updatePlayer(p, readInput(p), dt);
+  if (phase !== 'play' || !G) return;
+  if (!isHost) { guestUpdate(dt); return; }
+  for (const p of G.players) p._rev = false;
+  G.players.forEach((p, i) => updatePlayer(p, i === myIdx ? readInput(p) : takeRemote(i, p), dt));
+  // caídos: si nadie los está reviviendo se desangran
+  for (const p of G.players) if (p.down && !p.dead && !p.left && !p._rev) {
+    p.revT = 0; p.bleed -= dt;
+    if (p.bleed <= 0) { p.dead = true; p.down = false; sfx('hurt'); flash(p.name.toUpperCase() + ' SE DESANGRÓ'); }
+  }
   if (G.state === 'break') { G.breakT -= dt; if (G.breakT <= 0) startRound(); }
   else {
     G.spawnT -= dt;
@@ -878,12 +953,37 @@ function update(dt) {
   else if (G.pap.st === 'ready') { G.pap.t -= dt; if (G.pap.t <= 0) G.pap = { st: 'idle', t: 0, owner: null, gid: null }; }
   for (const d of G.drops) d.l -= dt;
   G.drops = G.drops.filter(d => d.l > 0 && !d.taken);
-  G.x2T -= dt; G.killT -= dt; G.msgT -= dt;
+  G.x2T -= dt; G.killT -= dt;
+  commonTimers(dt);
+  if (!G.players.some(alive)) gameOver();
+}
+function commonTimers(dt) {
+  G.msgT -= dt;
   if (G.banner > 0) G.banner = Math.max(0, G.banner - dt); else if (G.banner < 0) G.banner = Math.min(0, G.banner + dt);
   for (const f of G.fx) { f.l -= dt; if (!f.k) { f.x += f.vx * dt; f.y += f.vy * dt; } }
   G.fx = G.fx.filter(f => f.l > 0);
   for (const t of G.tracers) t.l -= dt; G.tracers = G.tracers.filter(t => t.l > 0);
-  if (G.players.every(p => p.down)) gameOver();
+}
+// invitado: mueve a su jugador aquí mismo (sin esperar) y lo demás lo dibuja con lo que manda el anfitrión
+function guestUpdate(dt) {
+  const me = G.players[myIdx];
+  if (me) {
+    const inp = readInput(me);
+    GOUT.fire = inp.fire; GOUT.act = inp.act;
+    GOUT.fp = GOUT.fp || inp.firePressed; GOUT.ap = GOUT.ap || inp.actPressed;
+    GOUT.rl = GOUT.rl || !!inp.reload; GOUT.kn = GOUT.kn || !!inp.knife; GOUT.sw = GOUT.sw || !!inp.swap;
+    if (alive(me) || me.down) me.aim = inp.aim;
+    if (alive(me)) {
+      me.mv = !!(inp.mx || inp.my);
+      const spd = hasPot(me, 'veloz') ? 88 : 70;
+      if (me.mv) move(me, inp.mx * spd, inp.my * spd, dt, pSolid, 4);
+    } else me.mv = false;
+  }
+  const k = Math.min(1, dt * 12);
+  G.players.forEach((p, i) => { p.flash -= dt; p.knifeAnim -= dt; if (i === myIdx || p.tx === undefined) return; p.x += (p.tx - p.x) * k; p.y += (p.ty - p.y) * k; });
+  for (const z of G.zombies) { z.anim += dt; z.flash -= dt; z.x += (z.tx - z.x) * k; z.y += (z.ty - z.y) * k; }
+  for (const d of G.drops) d.l -= dt;
+  commonTimers(dt);
 }
 function updateBox(dt) {
   const b = G.box;
@@ -893,10 +993,10 @@ function updateBox(dt) {
     if (b.t <= 0) {
       if (b.uses >= b.minUses && Math.random() < .35) {      // la paloma se lleva el baúl
         b.st = 'gone'; b.t = 4; sfx('dove'); flash('¡LA PALOMA SE LLEVÓ EL BAÚL!');
-        if (b.owner) b.owner.pts += 950;
-        const L = BOX_LOCS[b.loc]; G.fx.push({ k: 'dove', x: L.x, y: L.y, l: 2.5 });
+        if (G.players[b.owner]) G.players[b.owner].pts += 950;
+        const L = BOX_LOCS[b.loc]; addFx({ k: 'dove', x: L.x, y: L.y, l: 2.5 });
       } else {
-        const owned = b.owner ? b.owner.guns.map(g => g.id) : [];
+        const owned = G.players[b.owner] ? G.players[b.owner].guns.map(g => g.id) : [];
         const pool = BOX_POOL.filter(id => !owned.includes(id));
         b.gun = pool[Math.floor(Math.random() * pool.length)]; b.st = 'ready'; b.t = 9;
       }
@@ -917,28 +1017,263 @@ function takeDrop(k, p) {
   if (k === 'x2') G.x2T = 30;
   if (k === 'kill') G.killT = 30;
   if (k === 'bomb') {
-    sfx('boom'); G.fx.push({ k: 'white', l: .5 });
-    for (const z of G.zombies) if (!z.dead && z.st === 'in') { z.hp = 0; z.dead = true; G.fx.push({ k: 'corpse', x: z.x, y: z.y, l: .6 }); }
-    G.players.forEach(pl => { if (!pl.down) pl.pts += 400; });
+    sfx('boom'); addFx({ k: 'white', l: .5 });
+    for (const z of G.zombies) if (!z.dead && z.st === 'in') { z.hp = 0; z.dead = true; addFx({ k: 'corpse', x: z.x, y: z.y, l: .6 }); }
+    G.players.forEach(pl => { if (alive(pl)) pl.pts += 400; });
   }
 }
 function gameOver() {
-  phase = 'over'; const p = G.players[0];
-  document.getElementById('overTxt').innerHTML = `Sobreviviste <b style="color:#d8283a">${G.round} rondas</b><br><br>${p.kills} zombies eliminados`;
-  show('over'); sfx('hurt');
+  phase = 'over';
+  const d = { r: G.round, pl: G.players.map(p => ({ n: p.name, k: p.kills, c: p.ch })) };
+  play_('hurt'); showOver(d);
+  if (netOn) broadcast({ t: 'over', d });
 }
-let last = performance.now();
-function loop(ts) {
-  const dt = Math.min(.05, (ts - last) / 1000); last = ts;
-  if (phase !== 'play') { const pad = readPad(); if (pad && (pad.start || pad.actEdge) && (phase === 'menu' || phase === 'over')) play(); }
+function showOver(d) {
+  const rows = d.pl.map(p => `<span style="color:${CHARS[p.c].c}">${esc(p.n)}</span>: ${p.k} zombies`).join('<br>');
+  $('overTxt').innerHTML = `Sobrevivieron <b style="color:#d8283a">${d.r} rondas</b><br><br>${rows}`;
+  $('bRetry').classList.toggle('hidden', netOn && !isHost);
+  $('overWait').textContent = netOn && !isHost ? 'Esperando a que el anfitrión empiece otra…' : '';
+  show('over');
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ============================ RED (PeerJS) ============================ */
+// El anfitrión simula todo el juego. Cada invitado manda su posición y botones;
+// el anfitrión manda ~15 fotos por segundo del mundo.
+const NET_PREFIX = 'fdm-zt-', CODE_AB = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+let peer = null, hostConn = null, room = [], roomCode = '', ping = 0, lastRx = 0, lastTry = 0, lastSnap = 0, lastIn = 0, lastPing = 0, lostSince = 0;
+const RIN = [];                    // última entrada de cada invitado (en el anfitrión)
+let GOUT = {};                     // botones del invitado acumulados entre envíos
+let CID = '';
+try { CID = sessionStorage.getItem('fdm-cid') || ''; if (!CID) { CID = Math.random().toString(36).slice(2, 10); sessionStorage.setItem('fdm-cid', CID); } } catch (e) { CID = Math.random().toString(36).slice(2, 10); }
+const canStream = c => c && c.open && (!c.dataChannel || c.dataChannel.bufferedAmount < 64 * 1024);
+function send(c, m) { try { if (c && c.open) c.send(m); } catch (e) { } }
+function broadcast(m) { room.forEach(r => r.conn && send(r.conn, m)); }
+function setStatus(s) { $('status').textContent = s; }
+function newPeer(id) {
+  const p = id ? new Peer(id) : new Peer();
+  p.on('disconnected', () => { if (!p.destroyed) try { p.reconnect(); } catch (e) { } });
+  return p;
+}
+
+// ---- anfitrión ----
+function createRoom() {
+  ensureAudio(); leaveNet(true);
+  if (typeof Peer === 'undefined') { setStatus('No cargó la red. Revisa tu internet.'); return; }
+  roomCode = Array.from({ length: 4 }, () => CODE_AB[Math.random() * CODE_AB.length | 0]).join('');
+  setStatus('Creando sala…');
+  const p = peer = newPeer(NET_PREFIX + roomCode);
+  p.on('open', () => {
+    if (p !== peer) return;
+    isHost = true; netOn = true; myIdx = 0; room = [{ name: myName(), ch: myChar, conn: null, cid: CID }];
+    phase = 'lobby'; show('lobby'); renderLobby(); setStatus('');
+  });
+  p.on('error', e => {
+    if (p !== peer) return;
+    if (e.type === 'unavailable-id') { p.destroy(); createRoom(); }
+    else if (phase === 'menu') setStatus('Error de red: ' + e.type);
+  });
+  p.on('connection', c => {
+    c.on('data', m => hostOnData(c, m));
+    c.on('close', () => hostOnClose(c));
+    c.on('error', () => hostOnClose(c));
+  });
+}
+function roomList() { return room.map(r => ({ name: r.name, ch: r.ch })); }
+function syncLobby() { room.forEach((r, i) => r.conn && send(r.conn, { t: 'welcome', idx: i })); broadcast({ t: 'lobby', list: roomList(), code: roomCode }); renderLobby(); }
+function hostOnData(c, m) {
+  if (!m || !m.t) return;
+  if (m.t === 'join') {
+    const name = String(m.name || '').trim().slice(0, 12) || 'Jugador', ch = Math.max(0, Math.min(CHARS.length - 1, m.ch | 0));
+    // ¿es alguien que ya estaba (se reconecta)?
+    let i = room.findIndex((r, k) => k > 0 && r.cid === m.cid);
+    if (i > 0) {
+      const old = room[i].conn; room[i].conn = c; if (old && old !== c) try { old.close(); } catch (e) { }
+      if (G && G.players[i]) { G.players[i].left = false; G.players[i].tp++; }
+    } else {
+      if (room.length >= 4) { send(c, { t: 'full' }); return; }
+      room.push({ name, ch, conn: c, cid: m.cid }); i = room.length - 1;
+      if (phase === 'play' && G) {               // entra a mitad de partida junto a un compañero
+        const p = newPlayer(ch, name), a = G.players.find(alive) || G.players[0];
+        p.idx = i; p.x = a.x; p.y = a.y; p.tp = 1; p.invT = 3; G.players.push(p); G.solo = false;
+        flash(name.toUpperCase() + ' SE UNIÓ');
+      }
+    }
+    send(c, { t: 'welcome', idx: i });
+    if (phase === 'lobby') syncLobby();
+    else if (G) { send(c, { t: 'start', list: G.players.map(p => ({ name: p.name, ch: p.ch })) }); if (phase === 'over') send(c, { t: 'over', d: { r: G.round, pl: G.players.map(p => ({ n: p.name, k: p.kills, c: p.ch })) } }); }
+    else syncLobby();
+    return;
+  }
+  const i = room.findIndex(r => r.conn === c); if (i <= 0) return;
+  if (m.t === 'in') {
+    const o = RIN[i] || {};
+    RIN[i] = Object.assign(m, { at: performance.now(), fp: o.fp || m.fp, ap: o.ap || m.ap, rl: o.rl || m.rl, kn: o.kn || m.kn, sw: o.sw || m.sw });
+  } else if (m.t === 'ping') send(c, { t: 'pong', t0: m.t0 });
+}
+function hostOnClose(c) {
+  const i = room.findIndex(r => r.conn === c); if (i <= 0) return;
+  if (phase === 'lobby') { room.splice(i, 1); syncLobby(); return; }
+  room[i].conn = null; RIN[i] = null;
+  if (G && G.players[i]) { G.players[i].left = true; flash(G.players[i].name.toUpperCase() + ' SE DESCONECTÓ'); }
+}
+function takeRemote(i, p) {
+  const m = RIN[i];
+  if (!m || performance.now() - m.at > 1000) return { mx: 0, my: 0, aim: p.aim };   // sin datos: quieto
+  const inp = { pos: [m.x, m.y], tp: m.tp, mv: m.mv, aim: m.aim, fire: m.fire, firePressed: m.fp, reload: m.rl, knife: m.kn, swap: m.sw, act: m.act, actPressed: m.ap };
+  m.fp = m.ap = m.rl = m.kn = m.sw = false;
+  return inp;
+}
+function hostStart() {
+  room = room.filter((r, k) => k === 0 || (r.conn && r.conn.open));
+  room.forEach((r, i) => r.conn && send(r.conn, { t: 'welcome', idx: i }));
+  const list = roomList();
+  RIN.length = 0; evQ = { fx: [], tr: [], bl: [] }; sndQ = [];
+  ensureAudio(); newGame(list); phase = 'play'; show(null);
+  broadcast({ t: 'start', list });
+}
+const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
+function buildSnap() {
+  const s = {
+    t: 's', r: G.round, st: G.state, bn: r2(G.banner), pw: G.power, ro: G.roomOpen, dr: DOORS.map(d => d.open ? 1 : 0), wb: WINDOWS.map(w => w.boards),
+    bx: { loc: G.box.loc, st: G.box.st, gun: G.box.gun, show: G.box.show, owner: G.box.owner }, pp: { st: G.pap.st, owner: G.pap.owner, gid: G.pap.gid },
+    dp: G.drops.map(d => [Math.round(d.x), Math.round(d.y), d.k, r1(d.l)]), x2: r1(G.x2T), kl: r1(G.killT), msg: G.msg, mt: r1(G.msgT),
+    z: G.zombies.map(z => [z.id, Math.round(z.x), Math.round(z.y), z.face, z.flash > 0 ? 1 : 0]),
+    pl: G.players.map(p => ({
+      x: r1(p.x), y: r1(p.y), aim: r2(p.aim), mv: p.mv, hp: Math.ceil(p.hp), maxHp: p.maxHp, pts: p.pts, kills: p.kills, down: p.down, dead: p.dead, left: p.left,
+      bleed: r1(p.bleed), revT: r2(p.revT), guns: p.guns, cur: p.cur, relT: r2(p.relT), potions: p.potions, flash: r2(p.flash), knifeAnim: r2(p.knifeAnim),
+      name: p.name, ch: p.ch, tp: p.tp, hurtT: r1(Math.min(p.hurtT, 9)), invT: r1(p.invT),
+    })),
+    ev: evQ, snd: sndQ,
+  };
+  evQ = { fx: [], tr: [], bl: [] }; sndQ = [];
+  return s;
+}
+
+// ---- invitado ----
+function joinRoom() {
+  const code = $('code').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 4) { setStatus('El código tiene 4 letras'); return; }
+  ensureAudio(); leaveNet(true);
+  if (typeof Peer === 'undefined') { setStatus('No cargó la red. Revisa tu internet.'); return; }
+  roomCode = code; isHost = false; netOn = true; setStatus('Conectando…');
+  const p = peer = newPeer();
+  p.on('open', () => { if (p === peer) connectHost(); });
+  p.on('error', e => {
+    if (p !== peer) return;
+    if (e.type === 'peer-unavailable') { if (phase === 'menu') { leaveNet(true); setStatus('No existe la sala ' + code); } }
+    else if (phase === 'menu') setStatus('Error de red: ' + e.type);
+  });
+}
+function connectHost() {
+  lastTry = performance.now();
+  const c = hostConn = peer.connect(NET_PREFIX + roomCode, { reliable: true });
+  c.on('open', () => { if (c !== hostConn) return; lastRx = performance.now(); lostSince = 0; send(c, { t: 'join', name: myName(), ch: myChar, cid: CID }); });
+  c.on('data', m => { if (c !== hostConn) return; lastRx = performance.now(); lostSince = 0; guestOnData(m); });
+}
+function guestOnData(m) {
+  if (!m || !m.t) return;
+  if (m.t === 'welcome') { myIdx = m.idx; if (phase === 'menu') { phase = 'lobby'; show('lobby'); setStatus(''); } }
+  else if (m.t === 'lobby') { roomCode = m.code || roomCode; renderLobby(m.list); }
+  else if (m.t === 'full') { leaveNet(true); setStatus('La sala está llena (máximo 4)'); }
+  else if (m.t === 'bye') leaveNet(false, 'El anfitrión cerró la sala');
+  else if (m.t === 'start') { newGame(m.list); phase = 'play'; show(null); }
+  else if (m.t === 'over') { phase = 'over'; showOver(m.d); }
+  else if (m.t === 'pong') ping = Math.round(performance.now() - m.t0);
+  else if (m.t === 's' && G && phase === 'play') applySnap(m);
+}
+function applySnap(s) {
+  G.round = s.r; G.state = s.st; G.banner = s.bn; G.power = s.pw; G.roomOpen = s.ro;
+  s.dr.forEach((o, i) => { const d = DOORS[i]; if (o && !d.open) { d.open = true; d.tiles.forEach(([x, y]) => setT(x, y, FLOOR, d.a)); } });
+  s.wb.forEach((b, i) => { WINDOWS[i].boards = b; });
+  Object.assign(G.box, s.bx); G.pap = s.pp;
+  G.drops = s.dp.map(([x, y, k, l]) => ({ x, y, k, l }));
+  G.x2T = s.x2; G.killT = s.kl; G.msg = s.msg; G.msgT = s.mt;
+  const byId = new Map(G.zombies.map(z => [z.id, z]));
+  G.zombies = s.z.map(([id, x, y, face, fl]) => {
+    let z = byId.get(id);
+    if (!z) z = { id, x, y, anim: Math.random() * 10, flash: 0 };
+    else if (Math.hypot(z.x - x, z.y - y) > 48) { z.x = x; z.y = y; }
+    z.tx = x; z.ty = y; z.face = face; if (fl) z.flash = .08;
+    return z;
+  });
+  s.pl.forEach((d, i) => {
+    let p = G.players[i];
+    if (!p) { p = newPlayer(d.ch, d.name); p.idx = i; p.x = d.x; p.y = d.y; G.players[i] = p; G.solo = false; }
+    const { x, y, aim, mv, ...rest } = d;
+    if (i === myIdx) {
+      if (d.tp !== p.tp || d.down || d.dead) { p.x = x; p.y = y; }   // teletransporte o caído: manda el anfitrión
+      Object.assign(p, rest);
+    } else {
+      if (Math.hypot(p.x - x, p.y - y) > 48) { p.x = x; p.y = y; }
+      Object.assign(p, rest); p.tx = x; p.ty = y; p.aim = aim; p.mv = mv;
+    }
+  });
+  G.fx.push(...s.ev.fx); G.tracers.push(...s.ev.tr);
+  for (const b of s.ev.bl) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); }
+  s.snd.forEach(play_);
+}
+
+// ---- reloj de red (también corre con la pestaña en segundo plano) ----
+function netTick(now) {
+  if (!netOn) return;
+  if (isHost) {
+    if ((phase === 'play') && now - lastSnap > 66) {
+      lastSnap = now; const s = buildSnap();
+      room.forEach(r => { if (canStream(r.conn)) send(r.conn, s); });
+    }
+    return;
+  }
+  if (phase === 'menu') return;
+  const me = G && G.players[myIdx];
+  if (phase === 'play' && me && hostConn && now - lastIn > 50 && canStream(hostConn)) {
+    lastIn = now;
+    send(hostConn, { t: 'in', x: r1(me.x), y: r1(me.y), aim: r2(me.aim), mv: me.mv, tp: me.tp, ...GOUT });
+    GOUT = {};
+  }
+  if (hostConn && now - lastPing > 2000) { lastPing = now; send(hostConn, { t: 'ping', t0: now }); }
+  // sin noticias del anfitrión: reconectar
+  if (now - lastRx > 4000) {
+    if (!lostSince) lostSince = now;
+    if (now - lostSince > 30000) { leaveNet(false, 'Se perdió la conexión con el anfitrión'); return; }
+    if (now - lastTry > 3000 && peer && !peer.destroyed && peer.open) { try { hostConn && hostConn.close(); } catch (e) { } connectHost(); }
+  }
+}
+function leaveNet(quiet, msg) {
+  if (netOn && isHost) broadcast({ t: 'bye' });
+  const p = peer; peer = null; hostConn = null;
+  if (p) setTimeout(() => { try { p.destroy(); } catch (e) { } }, 150);
+  room = []; RIN.length = 0; netOn = false; isHost = true; myIdx = 0; GOUT = {};
+  if (!quiet) { phase = 'menu'; G = null; show('menu'); }
+  setStatus(msg || '');
+}
+
+/* ============================ BUCLE ============================ */
+let lastTick = performance.now();
+function tick() {
+  const now = performance.now(), dt = Math.min(.05, (now - lastTick) / 1000); lastTick = now;
+  if (dt <= 0) return;
+  if (phase !== 'play') {
+    const pad = readPad();
+    if (pad && (pad.start || pad.actEdge)) {
+      if (phase === 'menu') play();
+      else if (phase === 'lobby' && isHost) hostStart();
+      else if (phase === 'over' && (!netOn || isHost)) retry();
+    }
+  }
   padToast -= dt;
-  update(dt); render();
-  requestAnimationFrame(loop);
+  update(dt); netTick(now);
 }
+// el juego avanza con un temporizador en un Worker: así no se congela si la pestaña queda atrás
+try {
+  const w = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),16)'], { type: 'text/javascript' })));
+  w.onmessage = tick;
+} catch (e) { setInterval(tick, 16); }
+function frame() { render(); requestAnimationFrame(frame); }
 
 /* ============================ UI ============================ */
 const $ = id => document.getElementById(id);
-function show(id) { ['menu', 'help', 'over'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
+function show(id) { ['menu', 'help', 'over', 'lobby'].forEach(o => $(o).classList.toggle('hidden', o !== id)); $('touch').classList.toggle('hidden', !(isTouch && !usingPad && phase === 'play')); resize(); }
 CHARS.forEach((c, i) => {
   const b = document.createElement('button'); b.className = 'char' + (i === myChar ? ' sel' : '');
   const cvs = document.createElement('canvas'); cvs.width = 12; cvs.height = 14; cvs.getContext('2d').drawImage(SP['p' + i], 0, 0);
@@ -949,10 +1284,30 @@ CHARS.forEach((c, i) => {
 function myName() { return ($('name').value || '').trim().slice(0, 12) || CHARS[myChar].n; }
 try { $('name').value = localStorage.getItem('fdm-name') || ''; } catch (e) { }
 $('name').addEventListener('input', () => { try { localStorage.setItem('fdm-name', $('name').value.trim()); } catch (e) { } });
-function play() { ensureAudio(); newGame(); phase = 'play'; show(null); }
-$('bPlay').onclick = play; $('bRetry').onclick = play;
-$('bMenu').onclick = () => { phase = 'menu'; G = null; show('menu'); };
-$('bHelp').onclick = () => show('help'); $('bHelpClose').onclick = () => show(phase === 'play' ? null : 'menu');
+function renderLobby(list) {
+  list = list || roomList();
+  $('roomCode').textContent = roomCode;
+  $('lobbyList').innerHTML = list.map((p, i) => `<div class="pl"><span style="color:${CHARS[p.ch].c}">■</span> ${esc(p.name)}${i === 0 ? ' <small>(anfitrión)</small>' : ''}${i === myIdx ? ' <small>(tú)</small>' : ''}</div>`).join('')
+    + Array.from({ length: 4 - list.length }, () => '<div class="pl empty">· libre ·</div>').join('');
+  $('bStart').classList.toggle('hidden', !isHost);
+  $('lobbyStatus').textContent = isHost ? (list.length > 1 ? '¡Listos! Empieza cuando quieran.' : 'Esperando amigos… (puedes empezar solo)') : 'Esperando a que el anfitrión empiece…';
+}
+function play() { ensureAudio(); leaveNet(true); newGame(); phase = 'play'; show(null); }
+function retry() { if (netOn && isHost) hostStart(); else play(); }
+$('bPlay').onclick = play; $('bRetry').onclick = retry;
+$('bCreate').onclick = createRoom; $('bJoin').onclick = joinRoom;
+$('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
+$('bStart').onclick = hostStart;
+$('bLeave').onclick = () => leaveNet(false);
+$('bMenu').onclick = () => { if (netOn) leaveNet(false); else { phase = 'menu'; G = null; show('menu'); } };
+$('bShare').onclick = async () => {
+  const url = location.origin + location.pathname + '?sala=' + roomCode;
+  const txt = '¡Únete a mi partida de Función de Medianoche! Código: ' + roomCode;
+  try { if (navigator.share) { await navigator.share({ title: 'Función de Medianoche', text: txt, url }); return; } } catch (e) { return; }
+  try { await navigator.clipboard.writeText(txt + ' ' + url); $('lobbyStatus').textContent = '¡Enlace copiado!'; } catch (e) { $('lobbyStatus').textContent = url; }
+};
+{ const q = new URLSearchParams(location.search).get('sala'); if (q) $('code').value = q.toUpperCase().slice(0, 4); }
+$('bHelp').onclick = () => show('help'); $('bHelpClose').onclick = () => show(phase === 'play' ? null : phase === 'lobby' ? 'lobby' : phase === 'over' ? 'over' : 'menu');
 $('fs').onclick = () => {
   const d = document;
   if (!d.fullscreenElement) { (d.documentElement.requestFullscreen || d.documentElement.webkitRequestFullscreen || (() => { })).call(d.documentElement); try { screen.orientation.lock('landscape').catch(() => { }); } catch (e) { } }
@@ -969,4 +1324,4 @@ function resize() {
 addEventListener('resize', resize); addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 if (document.fonts && document.fonts.load) document.fonts.load("8px 'Press Start 2P'");
-requestAnimationFrame(loop);
+requestAnimationFrame(frame);
