@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v7 · palancas arregladas';
+const VERSION = 'v8 · toque = tiro al más cercano';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -592,26 +592,45 @@ addEventListener('gamepadconnected', () => {
   if (phase === 'play') show(null);   // ocultar botones táctiles si conectan un control
 });
 let padToast = 0;
-function joystick(el, onMove) {
-  const k = el.querySelector('.k'); let id = null, cx = 0, cy = 0;
+function joystick(el, onMove, onState) {
+  const k = el.querySelector('.k'); let id = null, cx = 0, cy = 0, t0 = 0, maxD = 0;
   const mv = e => {
     let dx = e.clientX - cx, dy = e.clientY - cy; const R = 48, d = Math.hypot(dx, dy);
     if (d > R) { dx *= R / d; dy *= R / d; }
+    maxD = Math.max(maxD, Math.min(1, d / R));
     k.style.transform = `translate(${dx}px,${dy}px)`; onMove(dx / R, dy / R);
   };
   el.addEventListener('pointerdown', e => {
     e.preventDefault(); ensureAudio();
     if (id !== null) return;           // otro dedo no le roba la palanca al que ya la usa
     id = e.pointerId; try { el.setPointerCapture(id); } catch (er) { }
+    t0 = performance.now(); maxD = 0;
     const r = el.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2; mv(e);
+    onState && onState(true, false, t0);
   });
   el.addEventListener('pointermove', e => { if (e.pointerId === id) mv(e); });
-  const end = e => { if (e.pointerId === id) { id = null; k.style.transform = ''; onMove(0, 0); } };
+  const end = e => {
+    if (e.pointerId !== id) return;
+    id = null; k.style.transform = ''; onMove(0, 0);
+    // toque rápido sin arrastrar = "clic" en la palanca
+    onState && onState(false, performance.now() - t0 < 300 && maxD < .3, t0);
+  };
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('lostpointercapture', end);
 }
 let jL = [0, 0], jR = [0, 0], tbtn = {}, tpress = {};
 joystick(document.getElementById('joyL'), (x, y) => { jL = [x, y]; });
-joystick(document.getElementById('joyR'), (x, y) => { jR = [x, y]; usingMouse = false; });
+// palanca de disparo: tocarla (sin arrastrar) dispara al zombie más cercano; mantenerla en el centro sigue disparándole
+let jRdown = false, jRt0 = 0, tapFire = false;
+joystick(document.getElementById('joyR'), (x, y) => { jR = [x, y]; usingMouse = false; },
+  (down, tap, t0) => { jRdown = down; jRt0 = t0; if (tap) tapFire = true; });
+function nearestTarget(p) {
+  let best = null, bd = 220 * 220;
+  for (const z of G.zombies) {
+    if (z.dead) continue; const d = dist2(p.x, p.y, z.x, z.y);
+    if (d < bd && sees(p.x, p.y - 1, z.x, z.y)) { bd = d; best = z; }
+  }
+  return best;
+}
 [['tAct', 'act'], ['tRel', 'reload'], ['tKnife', 'knife'], ['tSwap', 'swap']].forEach(([id, k]) => {
   const el = document.getElementById(id);
   el.addEventListener('pointerdown', e => { e.preventDefault(); ensureAudio(); el.setPointerCapture(e.pointerId); tbtn[k] = true; tpress[k] = true; el.classList.add('on'); });
@@ -664,6 +683,13 @@ function readInput(p) {
     if (pad.rx || pad.ry) aim = aimAssist(p, Math.atan2(pad.ry, pad.rx));
     else if (mx || my) aim = aimAssist(p, Math.atan2(my, mx));
     fire = pad.fire; firePressed = pad.fireEdge; usingMouse = false;
+  } else if (tapFire || (jRdown && rm <= .25 && performance.now() - jRt0 > 200)) {
+    // teléfono: clic en la palanca de disparo = tiro al zombie visible más cercano
+    const z = nearestTarget(p);
+    if (z) { aim = Math.atan2(z.y - (p.y - 1), z.x - p.x); fire = firePressed = true; }
+    else if (tapFire) { fire = firePressed = true; }       // sin zombies a la vista: dispara hacia donde mira
+    lastStickAim = aim; lastStickT = performance.now();
+    tapFire = false;
   } else if (rm > .25) {
     // teléfono: ayuda de puntería si hay un zombie cerca de la dirección
     aim = aimAssist(p, Math.atan2(jR[1], jR[0]));
