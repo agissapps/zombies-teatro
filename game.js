@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v16 · sticker una vez';
+const VERSION = 'v17 · pistola inicial 8/32';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -80,7 +80,7 @@ addWin(7, 0, 3, 'B', 5); addWin(7, 1, 3, 'B', 10); addWin(7, 1, 3, 'R', 6);
 for (const y of [27, 29, 31, 33]) for (const x of [35, 36, 37, 38, 42, 43, 44, 45]) setT(x + MX, y + MY, SEAT);
 
 const WEAPONS = {
-  pistola: { n: 'Pistola', dmg: 35, rate: .22, mag: 8, res: 80, rel: 1.2, spread: .03, range: 210, auto: false, cost: 250 },
+  pistola: { n: 'Pistola', dmg: 25, rate: .22, mag: 8, res: 80, rel: 1.2, spread: .03, range: 210, auto: false, cost: 250 },
   escopeta: { n: 'Escopeta', dmg: 28, pellets: 6, rate: .75, mag: 6, res: 36, rel: 2.2, spread: .22, range: 110, auto: false, cost: 1000 },
   subfusil: { n: 'Subfusil', dmg: 30, rate: .085, mag: 30, res: 180, rel: 1.8, spread: .07, range: 190, auto: true, cost: 1200 },
   rifle: { n: 'Rifle', dmg: 60, rate: .13, mag: 30, res: 150, rel: 2, spread: .03, range: 240, auto: true, cost: 1400 },
@@ -167,9 +167,11 @@ function newPlayer(ch, name) {
   return {
     ch, name: name || CHARS[ch].n, x: START.x, y: START.y, aim: 0, hp: 100, maxHp: 100, hurtT: 9, pts: 500, kills: 0, down: false,
     potions: [], invT: 0, idx: 0, tp: 0, bleed: 0, revT: 0, revBy: -1, dead: false, left: false,
-    guns: [gun('pistola')], cur: 0, cool: 0, relT: 0, knifeT: 0, knifeAnim: 0, repT: 0, trapT: 0, flash: 0, mv: false, face: 1,
+    guns: [startPistol()], cur: 0, cool: 0, relT: 0, knifeT: 0, knifeAnim: 0, repT: 0, trapT: 0, flash: 0, mv: false, face: 1,
   };
 }
+// pistola con la que empiezas: 8 en el cargador + 32 de reserva (al rellenar sube a 80)
+function startPistol() { const g = gun('pistola'); g.res = 32; return g; }
 function gun(id, up) { const w = wstat({ id, up }); return { id, up: !!up, ammo: w.mag, res: w.res }; }
 const hasPot = (p, id) => p.potions.includes(id);
 function addPts(p, n) { p.pts += n * (G.x2T > 0 ? 2 : 1); }
@@ -254,7 +256,7 @@ function startRound() {
   // los que se desangraron vuelven con pistola junto a un compañero
   const a = G.players.find(alive);
   if (a) for (const p of G.players) if (p.dead && !p.left) {
-    Object.assign(p, { dead: false, down: false, hp: 100, maxHp: 100, guns: [gun('pistola')], cur: 0, relT: 0, potions: [], invT: 3, x: a.x, y: a.y, revT: 0 });
+    Object.assign(p, { dead: false, down: false, hp: 100, maxHp: 100, guns: [startPistol()], cur: 0, relT: 0, potions: [], invT: 3, x: a.x, y: a.y, revT: 0 });
     p.tp++; flash('¡' + p.name.toUpperCase() + ' VOLVIÓ!');
   }
 }
