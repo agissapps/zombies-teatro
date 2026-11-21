@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v3 · fase 2';
+const VERSION = 'v4 · fase 2 + zombies listos';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -233,15 +233,41 @@ const zombieHp = r => r < 10 ? 100 + 80 * (r - 1) : Math.round(820 * Math.pow(1.
 function startRound() {
   G.round++; G.dropsRound = 0; G.toSpawn = roundTotal(G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
 }
-function spawnZombie() {
-  const open = WINDOWS.filter(w => G.roomOpen[w.room]);
-  if (!open.length) return false;
-  let best = null, bd = 1e12;
-  for (let k = 0; k < 3; k++) {          // de 3 ventanas al azar, la más cercana a algún jugador
-    const w = open[Math.floor(Math.random() * open.length)];
-    const d = Math.min(...G.players.map(p => dist2(p.x, p.y, w.px, w.py)));
-    if (d < bd) { bd = d; best = w; }
+// ¿se ve en línea recta de (x1,y1) a (x2,y2)? (las butacas no tapan la vista)
+function sees(x1, y1, x2, y2) {
+  const d = Math.hypot(x2 - x1, y2 - y1), n = Math.ceil(d / 4);
+  for (let i = 1; i < n; i++) {
+    const t = tAt(x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n);
+    if (t === VOID || t === DOOR) return false;
   }
+  return true;
+}
+// camino recto libre para caminar (sin butacas ni paredes)
+function walkable(x1, y1, x2, y2) {
+  const d = Math.hypot(x2 - x1, y2 - y1), n = Math.ceil(d / 4);
+  for (let i = 1; i < n; i++) {
+    const x = x1 + (x2 - x1) * i / n, y = y1 + (y2 - y1) * i / n;
+    if (blocked(x, y, 4, zSolid)) return false;
+  }
+  return true;
+}
+const VISION = 170;
+// ventana para atacar: de las más cercanas a los jugadores (al azar entre las 3 mejores),
+// sin salir justo encima de alguien
+function pickWindow() {
+  const live = G.players.filter(p => !p.down);
+  const open = WINDOWS.filter(w => G.roomOpen[w.room]).map(w => ({ w, d: Math.min(...live.map(p => Math.hypot(p.x - w.px, p.y - w.py))) }))
+    .filter(o => o.d > 56).sort((a, b) => a.d - b.d);
+  if (!open.length) { const any = WINDOWS.filter(w => G.roomOpen[w.room]); return any.length ? any[Math.floor(Math.random() * any.length)] : null; }
+  return open[Math.floor(Math.random() * Math.min(3, open.length))].w;
+}
+function respawnNear(z) {
+  const w = pickWindow(); if (!w) return;
+  z.w = w; z.x = w.sx; z.y = w.sy; z.st = 'out'; z.unseen = 0; z.lost = 0;
+}
+function spawnZombie() {
+  const best = pickWindow();
+  if (!best) return false;
   const r = G.round, roll = Math.random();
   let sp = 20 + Math.random() * 6;
   if (r >= 3 && roll < Math.min(.85, (r - 2) * .14)) sp = 38 + Math.random() * 8;
@@ -256,6 +282,9 @@ function updateZombies(dt) {
     if (Math.random() < dt * .05) sfx('groan');
     if (z.st === 'out') {
       const w = z.w;
+      // esperando en una ventana lejos de todos: se cambia a una ventana más cercana
+      const near = Math.min(...G.players.filter(p => !p.down).map(p => Math.hypot(p.x - w.px, p.y - w.py)));
+      if (near > 230) { z.unseen = (z.unseen || 0) + dt; if (z.unseen > 7) { respawnNear(z); continue; } } else z.unseen = 0;
       if (w.boards > 0) {
         const d = Math.hypot(w.ox - z.x, w.oy - z.y);
         if (d > 2) { z.x += (w.ox - z.x) / d * z.sp * dt; z.y += (w.oy - z.y) / d * z.sp * dt; }
@@ -267,16 +296,23 @@ function updateZombies(dt) {
       }
       continue;
     }
-    // dentro: perseguir al jugador más cercano
-    let tp = null, td = 1e12;
-    for (const p of G.players) { if (p.down) continue; const d = dist2(p.x, p.y, z.x, z.y); if (d < td) { td = d; tp = p; } }
+    // dentro: si ve a alguien, va por el jugador visible más cercano; si no, sigue el camino más corto
+    let tp = null, td = 1e12, vis = false;
+    for (const p of G.players) {
+      if (p.down) continue; const d = dist2(p.x, p.y, z.x, z.y);
+      if (d < VISION * VISION && d < td && sees(z.x, z.y, p.x, p.y)) { td = d; tp = p; vis = true; }
+    }
+    if (!tp) for (const p of G.players) { if (p.down) continue; const d = dist2(p.x, p.y, z.x, z.y); if (d < td) { td = d; tp = p; } }
     if (!tp) continue;
+    // si nadie lo ve y está lejos, reaparece por una ventana cerca de los jugadores (otra ruta)
+    if (!vis && td > 210 * 210) { z.unseen = (z.unseen || 0) + dt; if (z.unseen > 6) { respawnNear(z); continue; } } else z.unseen = 0;
     const tx = Math.floor(z.x / TS), ty = Math.floor(z.y / TS), here = DIST[idx(tx, ty)];
     let gx = tp.x, gy = tp.y;
-    if (here < 0) { z.lost += dt; }
+    const direct = vis && walkable(z.x, z.y, tp.x, tp.y);
+    if (here < 0 && !direct) { z.lost += dt; }
     else {
       z.lost = 0;
-      if (here > 1 && td > 26 * 26) {
+      if (!direct && here > 0) {
         let best = here;
         for (const [dx, dy] of N8) {
           const nx = tx + dx, ny = ty + dy, j = idx(nx, ny);
@@ -286,7 +322,7 @@ function updateZombies(dt) {
         }
       }
     }
-    if (z.lost > 5) { z.dead = true; G.toSpawn++; continue; }   // atascado sin camino: reaparece en otra ventana
+    if (z.lost > 4) { respawnNear(z); continue; }   // atascado sin camino: reaparece en otra ventana
     const d = Math.hypot(gx - z.x, gy - z.y) || 1;
     z.slowT = (z.slowT || 0) - dt;
     const sp = (z.atk > .6 ? z.sp * .3 : z.sp) * (z.slowT > 0 ? .4 : 1);
