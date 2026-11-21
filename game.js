@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v8 · toque = tiro al más cercano';
+const VERSION = 'v9 · balas que atraviesan';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -395,8 +395,9 @@ function ray(x, y, a, range) {
     if (z.dead) continue;
     const dx = z.x - x, dy = z.y - y, proj = dx * cs + dy * sn;
     if (proj < 0 || proj > wallT) continue;
-    if (Math.abs(-dx * sn + dy * cs) < 7) { all.push(z); if (proj < ht) { hit = z; ht = proj; } }
+    if (Math.abs(-dx * sn + dy * cs) < 7) { z._t = proj; all.push(z); if (proj < ht) { hit = z; ht = proj; } }
   }
+  all.sort((a, b) => a._t - b._t);      // del más cercano al más lejano
   return { hit, t: ht, wallT, all };
 }
 function explode(x, y, R, dmg, p) {
@@ -413,11 +414,12 @@ function shoot(p) {
   for (let k = 0; k < (W.pellets || 1); k++) {
     const a = p.aim + (Math.random() - .5) * 2 * W.spread;
     const r = ray(ox, oy, a, W.range);
-    const end = W.pierce ? r.wallT : r.t;
+    // las balas atraviesan hasta 3 zombies (la escopeta hasta 4); el rayo de hielo, todos
+    const pen = g.id === 'escopeta' ? 4 : 3, hits = W.pierce ? r.all : r.all.slice(0, pen);
+    const end = W.explode ? r.t : W.pierce || hits.length < pen ? r.wallT : hits[pen - 1]._t;
     addTr({ x1: ox, y1: oy, x2: ox + Math.cos(a) * end, y2: oy + Math.sin(a) * end, l: W.pierce ? .15 : .06, c: W.slow ? '#8fe8ff' : g.up ? '#ffd84a' : null });
     if (W.explode) explode(ox + Math.cos(a) * r.t, oy + Math.sin(a) * r.t, W.explode, W.dmg, p);
-    else if (W.pierce) r.all.forEach(z => { hurtZombie(z, W.dmg, p, false); if (W.slow) z.slowT = 2.5; });
-    else if (r.hit) hurtZombie(r.hit, W.dmg, p, false);
+    else hits.forEach(z => { hurtZombie(z, W.dmg, p, false); if (W.slow) z.slowT = 2.5; });
   }
   if (g.ammo === 0 && g.res > 0) reload(p);
 }
