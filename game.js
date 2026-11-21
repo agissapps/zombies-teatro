@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v15 · sticker ¡recarguen!';
+const VERSION = 'v16 · sticker una vez';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -147,6 +147,7 @@ function addFx(f) { G.fx.push(f); if (isHost && netOn && evQ.fx.length < 80) evQ
 function addTr(t) { G.tracers.push(t); if (isHost && netOn && evQ.tr.length < 60) evQ.tr.push(t); }
 function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn && evQ.bl.length < 40) evQ.bl.push(b); }
 function newGame(list) {
+  if (typeof stkUsed !== 'undefined') stkUsed.clear();
   ROUTE = null; mapOpen = false; syncMapUI();
   for (const k in GUIDES) delete GUIDES[k];
   list = list || [{ name: myName(), ch: myChar }];
@@ -407,9 +408,9 @@ function hurtZombie(z, dmg, p, knife) {
     z.dead = true; addPts(p, knife ? 120 : 50); p.kills++; sfx('kill');
     if (z.gold) {         // el dorado siempre suelta un premio
       const types = ['ammo', 'bomb', 'x2', 'carp', 'kill'];
-      G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 30 }); flash('¡ZOMBIE DORADO ELIMINADO!');
+      G.drops.push({ id: ++G.zid, k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 30 }); flash('¡ZOMBIE DORADO ELIMINADO!');
     } else if (z.st === 'in' && G.dropsRound < 4 && Math.random() < .03) {
-      const types = Object.keys(DROPS); G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 25 }); G.dropsRound++;
+      const types = Object.keys(DROPS); G.drops.push({ id: ++G.zid, k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 25 }); G.dropsRound++;
     }
     addBlood({ x: z.x + (Math.random() * 6 - 3), y: z.y + 4, s: 3 + Math.random() * 4 });
     addFx({ k: 'corpse', x: z.x, y: z.y, l: .6, face: z.face });
@@ -918,17 +919,20 @@ function drawGuides(me) {
 /* ============================ STICKERS ============================ */
 // Al ver una munición máxima en el piso aparece el botón ¡RECARGUEN!: avisa a todos que recarguen
 // antes de que alguien la tome (así se llenan cargador y reserva).
-let lastStk = 0;
-function ammoInView() {
-  if (!G || G.solo || phase !== 'play') return false;
-  return G.drops.some(d => d.k === 'ammo' && d.x > cam.x - 8 && d.x < cam.x + VW + 8 && d.y > cam.y - 8 && d.y < cam.y + VH + 8);
+let lastStk = -1e9;
+const stkUsed = new Set();      // municiones máximas por las que YA avisaste (una vez cada una)
+function ammoDropsInView() {
+  if (!G || G.solo || phase !== 'play') return [];
+  return G.drops.filter(d => d.k === 'ammo' && !stkUsed.has(d.id) && d.x > cam.x - 8 && d.x < cam.x + VW + 8 && d.y > cam.y - 8 && d.y < cam.y + VH + 8);
 }
+const ammoInView = () => ammoDropsInView().length > 0;
 function addSticker(f, k) {      // solo en el anfitrión
   if (k !== 'reload' || G.stk.some(s => s.f === f)) return;
   G.stk.push({ f, k, l: 3.5 }); sfx('sticker');
 }
 function sendSticker() {
-  const now = performance.now(); if (now - lastStk < 1500 || !ammoInView()) return; lastStk = now;
+  const now = performance.now(), ds = ammoDropsInView(); if (now - lastStk < 1500 || !ds.length) return; lastStk = now;
+  ds.forEach(d => stkUsed.add(d.id));
   if (isHost) addSticker(myIdx, 'reload'); else { send(hostConn, { t: 'stk', k: 'reload' }); play_('sticker'); }
 }
 function reloadIcon(x, y, R, c) {   // flechas en círculo
@@ -1411,7 +1415,7 @@ function buildSnap() {
   const s = {
     t: 's', r: G.round, st: G.state, bn: r2(G.banner), pw: G.power, ro: G.roomOpen, dr: DOORS.map(d => d.open ? 1 : 0), wb: WINDOWS.map(w => w.boards),
     bx: { loc: G.box.loc, st: G.box.st, gun: G.box.gun, show: G.box.show, owner: G.box.owner }, pp: { st: G.pap.st, owner: G.pap.owner, gid: G.pap.gid },
-    dp: G.drops.map(d => [Math.round(d.x), Math.round(d.y), d.k, r1(d.l)]), x2: r1(G.x2T), kl: r1(G.killT), msg: G.msg, mt: r1(G.msgT),
+    dp: G.drops.map(d => [Math.round(d.x), Math.round(d.y), d.k, r1(d.l), d.id]), x2: r1(G.x2T), kl: r1(G.killT), msg: G.msg, mt: r1(G.msgT),
     z: G.zombies.map(z => [z.id, Math.round(z.x), Math.round(z.y), z.face, z.flash > 0 ? 1 : 0, z.gold ? 1 : 0]),
     pl: G.players.map(p => ({
       x: r1(p.x), y: r1(p.y), aim: r2(p.aim), mv: p.mv, hp: Math.ceil(p.hp), maxHp: p.maxHp, pts: p.pts, kills: p.kills, down: p.down, dead: p.dead, left: p.left,
@@ -1467,7 +1471,7 @@ function applySnap(s) {
   s.dr.forEach((o, i) => { const d = DOORS[i]; if (o && !d.open) { d.open = true; d.tiles.forEach(([x, y]) => setT(x, y, FLOOR, d.a)); } });
   s.wb.forEach((b, i) => { WINDOWS[i].boards = b; });
   Object.assign(G.box, s.bx); G.pap = s.pp;
-  G.drops = s.dp.map(([x, y, k, l]) => ({ x, y, k, l }));
+  G.drops = s.dp.map(([x, y, k, l, id]) => ({ x, y, k, l, id }));
   G.x2T = s.x2; G.killT = s.kl; G.msg = s.msg; G.msgT = s.mt; if (s.stk) G.stk = s.stk;
   const byId = new Map(G.zombies.map(z => [z.id, z]));
   G.zombies = s.z.map(([id, x, y, face, fl, gd]) => {
