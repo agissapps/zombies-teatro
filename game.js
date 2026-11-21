@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v13 · mapa y rutas';
+const VERSION = 'v14 · zombies dorados';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -104,7 +104,7 @@ const POTIONS = [
   { id: 'angel', n: 'Jugo Ángel', cost: 1500, x: 12, y: 34, c: '#8fd0ff', d: 'Te levanta una vez si caes' },
   { id: 'veloz', n: 'Paleta Veloz', cost: 2000, x: 18, y: 26, c: '#b78cff', d: 'Corres más rápido' },
 ].map(p => ({ ...p, x: (p.x + MX) * TS + 8, y: (p.y + MY) * TS + 8 }));
-const DROPS = { ammo: { n: 'MUNICIÓN MÁXIMA', c: '#8fd0ff', l: 'M' }, x2: { n: 'DOBLE PUNTOS', c: '#ffc93c', l: '2' }, kill: { n: 'GOLPE MORTAL', c: '#ff4040', l: '!' }, bomb: { n: 'BOMBA', c: '#ff9a3c', l: 'B' } };
+const DROPS = { ammo: { n: 'MUNICIÓN MÁXIMA', c: '#8fd0ff', l: 'M' }, x2: { n: 'DOBLE PUNTOS', c: '#ffc93c', l: '2' }, kill: { n: 'GOLPE MORTAL', c: '#ff4040', l: '!' }, bomb: { n: 'BOMBA', c: '#ff9a3c', l: 'B' }, carp: { n: 'CARPINTERO', c: '#b07a46', l: 'C' } };
 // armas en la pared: [arma, celda, desplazamiento en la pared de arriba]
 const WALLBUYS = [['pistola', 2, 1, 7], ['escopeta', 1, 1, 8], ['subfusil', 2, 2, 12], ['rifle', 0, 1, 12], ['ametra', 0, 2, 3]]
   .map(([w, cx, cy, off]) => ({ w, tx: cx * CW + off + MX, ty: cy * CH + MY, x: (cx * CW + off + MX) * TS + 8, y: (cy * CH + MY) * TS + 8 }));
@@ -124,6 +124,7 @@ function mk(name, rows, pal) {
 const ZROWS = ['....gggg....', '...gggggg...', '...grggrg...', '...gGggGg...', '....gGGg....', 'gg.bbbbbb.gg', '.g.bbBbbb.g.',
   '...bbbBbb...', '...bBbbbb...', '...bbbbbb...', '...pppppp...', '...pp..pp...', '...pp..pp...', '...kk..kk...'];
 mk('zombie', ZROWS, { g: '#7fae5a', G: '#4f7a38', r: '#ff3030', b: '#6b5a4a', B: '#4a3a2e', p: '#3a3550', k: '#1a1418' });
+mk('zombieG', ZROWS, { g: '#ffd84a', G: '#c8961e', r: '#ff3030', b: '#b8860b', B: '#8a6410', p: '#6a5020', k: '#3a2a10' });
 mk('zombieW', ZROWS, { g: '#fff', G: '#fff', r: '#fff', b: '#fff', B: '#fff', p: '#fff', k: '#fff' });
 const PROWS = ['....hhhh....', '...hhhhhh...', '...hsssshh..', '...skssks...', '...ssssss...', '....ssss....', '..cccccccc..',
   '.scCccccCcs.', '.s.cccccc.s.', '...cccccc...', '...pppppp...', '...pp..pp...', '...pp..pp...', '...kk..kk...'];
@@ -156,7 +157,7 @@ function newGame(list) {
     solo: list.length === 1, over: null,
     box: { loc: Math.floor(Math.random() * BOX_LOCS.length), st: 'idle', t: 0, gun: null, show: '', uses: 0, minUses: 4 + Math.floor(Math.random() * 4), owner: null },
     pap: { st: 'idle', t: 0, owner: null, gid: null },
-    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0, zid: 0,
+    drops: [], dropsRound: 0, x2T: 0, killT: 0, msg: '', msgT: 0, zid: 0, nextGold: 2 + Math.floor(Math.random() * 4), goldPending: false,
   };
   DOORS.forEach(d => { d.open = false; d.tiles.forEach(([x, y]) => setT(x, y, DOOR)); });
   WINDOWS.forEach(w => { w.boards = 6; });
@@ -245,7 +246,9 @@ function flowField() {
 const roundTotal = r => Math.round(4 + r * 3 + r * r * .3);
 const zombieHp = r => r < 10 ? 100 + 80 * (r - 1) : Math.round(820 * Math.pow(1.1, r - 9));
 function startRound() {
-  G.round++; G.dropsRound = 0; G.toSpawn = roundTotal(G.round) + (G.players.filter(p => !p.left).length - 1) * (2 + G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
+  G.round++; G.dropsRound = 0;
+  // zombie dorado: uno cada 2 a 5 rondas (al azar)
+  if (G.round >= G.nextGold) { G.goldPending = true; G.nextGold = G.round + 2 + Math.floor(Math.random() * 4); } G.toSpawn = roundTotal(G.round) + (G.players.filter(p => !p.left).length - 1) * (2 + G.round); G.spawnT = 1.5; G.state = 'round'; G.banner = 3; sfx('round');
   // los que se desangraron vuelven con pistola junto a un compañero
   const a = G.players.find(alive);
   if (a) for (const p of G.players) if (p.dead && !p.left) {
@@ -292,7 +295,10 @@ function spawnZombie() {
   let sp = 20 + Math.random() * 6;
   if (r >= 3 && roll < Math.min(.85, (r - 2) * .14)) sp = 38 + Math.random() * 8;
   if (r >= 6 && roll < Math.min(.45, (r - 5) * .08)) sp = 56 + Math.random() * 6;
-  G.zombies.push({ id: ++G.zid, rush: Math.random() < .10 + Math.random() * .05, x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r), sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
+  // el dorado sale a media ronda
+  const gold = G.goldPending && G.toSpawn <= Math.ceil(roundTotal(r) / 2);
+  if (gold) { G.goldPending = false; flash('¡UN ZOMBIE DORADO ANDA SUELTO!'); sfx('power'); }
+  G.zombies.push({ id: ++G.zid, gold, rush: !gold && Math.random() < .10 + Math.random() * .05, x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r) * (gold ? 2 : 1), sp: gold ? Math.max(sp, 30) : sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
   return true;
 }
 function updateZombies(dt) {
@@ -398,7 +404,10 @@ function hurtZombie(z, dmg, p, knife) {
   for (let i = 0; i < 3; i++) addFx({ x: z.x, y: z.y - 2, vx: (Math.random() - .5) * 60, vy: (Math.random() - .5) * 60, l: .35, c: '#a01020' });
   if (z.hp <= 0 && !z.dead) {
     z.dead = true; addPts(p, knife ? 120 : 50); p.kills++; sfx('kill');
-    if (z.st === 'in' && G.dropsRound < 4 && Math.random() < .03) {
+    if (z.gold) {         // el dorado siempre suelta un premio
+      const types = ['ammo', 'bomb', 'x2', 'carp', 'kill'];
+      G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 30 }); flash('¡ZOMBIE DORADO ELIMINADO!');
+    } else if (z.st === 'in' && G.dropsRound < 4 && Math.random() < .03) {
       const types = Object.keys(DROPS); G.drops.push({ k: types[Math.floor(Math.random() * types.length)], x: z.x, y: z.y, l: 25 }); G.dropsRound++;
     }
     addBlood({ x: z.x + (Math.random() * 6 - 3), y: z.y + 4, s: 3 + Math.random() * 4 });
@@ -1039,8 +1048,9 @@ function render() {
     if (k === 'z') {
       const bob = Math.floor(e.anim * 6) % 2, X = Math.round(e.x), Y = Math.round(e.y);
       r(X - 5, Y + 5, 10, 2, 'rgba(0,0,0,.35)');
-      const spr = e.flash > 0 ? SP.zombieW : SP.zombie;
+      const spr = e.flash > 0 ? SP.zombieW : e.gold ? SP.zombieG : SP.zombie;
       ctx.save(); if (e.face < 0) { ctx.translate(X, 0); ctx.scale(-1, 1); ctx.drawImage(spr, -6, Y - 8 - bob); } else ctx.drawImage(spr, X - 6, Y - 8 - bob); ctx.restore();
+      if (e.gold) { const t = performance.now() / 150 + e.id; for (let i = 0; i < 3; i++) { const an = t + i * 2.1; r(Math.round(X + Math.cos(an) * 8), Math.round(Y - 4 + Math.sin(an) * 7), 1, 1, '#fff2b3'); } }
     } else if (k === 'c') {
       ctx.globalAlpha = Math.max(0, e.l / .6); ctx.drawImage(SP.zombie, Math.round(e.x) - 6, Math.round(e.y) - 4, 12, 9); ctx.globalAlpha = 1;
     } else {
@@ -1081,6 +1091,8 @@ function render() {
     const g = dctx.createRadialGradient(sx, sy, 8, sx, sy, R); g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
     dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, R, 0, Math.PI * 2); dctx.fill();
   }
+  // los zombies dorados brillan un poco en la oscuridad
+  for (const z of G.zombies) if (z.gold) { const sx = z.x - cam.x, sy = z.y - cam.y, g = dctx.createRadialGradient(sx, sy, 2, sx, sy, 26); g.addColorStop(0, 'rgba(0,0,0,.9)'); g.addColorStop(1, 'rgba(0,0,0,0)'); dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, 26, 0, Math.PI * 2); dctx.fill(); }
   ctx.drawImage(dark, 0, 0);
   ctx.save(); ctx.translate(-cam.x, -cam.y); drawGuides(me); drawRoute(me); ctx.restore();   // la línea guía va encima de la oscuridad
   // compañeros caídos fuera de la pantalla: flecha roja en el borde
@@ -1227,6 +1239,10 @@ function takeDrop(k, p) {
   if (k === 'ammo') G.players.forEach(pl => pl.guns.forEach(g => { const W = wstat(g); g.res = W.res; g.ammo = W.mag; }));
   if (k === 'x2') G.x2T = 30;
   if (k === 'kill') G.killT = 30;
+  if (k === 'carp') {      // carpintero: todas las ventanas reparadas
+    WINDOWS.forEach(w => { w.boards = 6; }); sfx('board');
+    G.players.forEach(pl => { if (alive(pl)) pl.pts += 200; });
+  }
   if (k === 'bomb') {
     sfx('boom'); addFx({ k: 'white', l: .5 });
     for (const z of G.zombies) if (!z.dead && z.st === 'in') { z.hp = 0; z.dead = true; addFx({ k: 'corpse', x: z.x, y: z.y, l: .6 }); }
@@ -1351,7 +1367,7 @@ function buildSnap() {
     t: 's', r: G.round, st: G.state, bn: r2(G.banner), pw: G.power, ro: G.roomOpen, dr: DOORS.map(d => d.open ? 1 : 0), wb: WINDOWS.map(w => w.boards),
     bx: { loc: G.box.loc, st: G.box.st, gun: G.box.gun, show: G.box.show, owner: G.box.owner }, pp: { st: G.pap.st, owner: G.pap.owner, gid: G.pap.gid },
     dp: G.drops.map(d => [Math.round(d.x), Math.round(d.y), d.k, r1(d.l)]), x2: r1(G.x2T), kl: r1(G.killT), msg: G.msg, mt: r1(G.msgT),
-    z: G.zombies.map(z => [z.id, Math.round(z.x), Math.round(z.y), z.face, z.flash > 0 ? 1 : 0]),
+    z: G.zombies.map(z => [z.id, Math.round(z.x), Math.round(z.y), z.face, z.flash > 0 ? 1 : 0, z.gold ? 1 : 0]),
     pl: G.players.map(p => ({
       x: r1(p.x), y: r1(p.y), aim: r2(p.aim), mv: p.mv, hp: Math.ceil(p.hp), maxHp: p.maxHp, pts: p.pts, kills: p.kills, down: p.down, dead: p.dead, left: p.left,
       bleed: r1(p.bleed), revT: r2(p.revT), guns: p.guns, cur: p.cur, relT: r2(p.relT), potions: p.potions, flash: r2(p.flash), knifeAnim: r2(p.knifeAnim),
@@ -1408,11 +1424,11 @@ function applySnap(s) {
   G.drops = s.dp.map(([x, y, k, l]) => ({ x, y, k, l }));
   G.x2T = s.x2; G.killT = s.kl; G.msg = s.msg; G.msgT = s.mt;
   const byId = new Map(G.zombies.map(z => [z.id, z]));
-  G.zombies = s.z.map(([id, x, y, face, fl]) => {
+  G.zombies = s.z.map(([id, x, y, face, fl, gd]) => {
     let z = byId.get(id);
     if (!z) z = { id, x, y, anim: Math.random() * 10, flash: 0 };
     else if (Math.hypot(z.x - x, z.y - y) > 48) { z.x = x; z.y = y; }
-    z.tx = x; z.ty = y; z.face = face; if (fl) z.flash = .08;
+    z.tx = x; z.ty = y; z.face = face; z.gold = !!gd; if (fl) z.flash = .08;
     return z;
   });
   s.pl.forEach((d, i) => {
