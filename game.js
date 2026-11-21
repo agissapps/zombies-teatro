@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v6 · en línea + PWA';
+const VERSION = 'v7 · palancas arregladas';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -576,9 +576,12 @@ addEventListener('keydown', e => { if (!keys[e.code]) pressed[e.code] = true; ke
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseDown = false; });
 const cv = document.getElementById('game');
-cv.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; usingMouse = true; });
-cv.addEventListener('mousedown', e => { if (e.button === 0) { mouseDown = true; mousePressed = true; ensureAudio(); } });
-addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; });
+// solo un ratón de verdad apunta/dispara con el cursor; los toques en la pantalla no cuentan como ratón
+cv.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse') return; mouseX = e.clientX; mouseY = e.clientY; usingMouse = true; });
+cv.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' || e.button !== 0) return; mouseX = e.clientX; mouseY = e.clientY; usingMouse = true; mouseDown = true; mousePressed = true; ensureAudio(); });
+addEventListener('pointerup', e => { if (e.pointerType === 'mouse' && e.button === 0) mouseDown = false; });
+if (isTouchDevice()) usingMouse = false;
+function isTouchDevice() { return matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window; }
 cv.addEventListener('wheel', e => { pressed.KeyQ = true; e.preventDefault(); }, { passive: false });
 addEventListener('contextmenu', e => e.preventDefault());
 
@@ -596,10 +599,15 @@ function joystick(el, onMove) {
     if (d > R) { dx *= R / d; dy *= R / d; }
     k.style.transform = `translate(${dx}px,${dy}px)`; onMove(dx / R, dy / R);
   };
-  el.addEventListener('pointerdown', e => { ensureAudio(); id = e.pointerId; el.setPointerCapture(id); const r = el.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2; mv(e); });
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault(); ensureAudio();
+    if (id !== null) return;           // otro dedo no le roba la palanca al que ya la usa
+    id = e.pointerId; try { el.setPointerCapture(id); } catch (er) { }
+    const r = el.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2; mv(e);
+  });
   el.addEventListener('pointermove', e => { if (e.pointerId === id) mv(e); });
   const end = e => { if (e.pointerId === id) { id = null; k.style.transform = ''; onMove(0, 0); } };
-  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('lostpointercapture', end);
 }
 let jL = [0, 0], jR = [0, 0], tbtn = {}, tpress = {};
 joystick(document.getElementById('joyL'), (x, y) => { jL = [x, y]; });
@@ -611,7 +619,7 @@ joystick(document.getElementById('joyR'), (x, y) => { jR = [x, y]; usingMouse = 
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 });
 
-let lastStickAim = 0;
+let lastStickAim = 0, lastStickT = -1e9;
 // ---- control (Xbox / PlayStation / genérico, mapeo estándar) ----
 // Palanca izq: mover · Palanca der: apuntar · RT/R2: disparar · A/✕: acción · X/□: recargar
 // B/○ o RB/R1: cuchillo · Y/△: cambiar arma · Start: jugar
@@ -659,16 +667,19 @@ function readInput(p) {
   } else if (rm > .25) {
     // teléfono: ayuda de puntería si hay un zombie cerca de la dirección
     aim = aimAssist(p, Math.atan2(jR[1], jR[0]));
-    fire = rm > .55; firePressed = fire && !readInput.wasFire; readInput.wasFire = fire;
-    lastStickAim = aim;
+    // a fondo dispara; con la palanca todas las armas siguen disparando a su ritmo mientras la mantengas
+    fire = rm > .55; firePressed = fire;
+    lastStickAim = aim; lastStickT = performance.now();
   } else {
-    readInput.wasFire = false;
     if (usingMouse) {
       const r = cv.getBoundingClientRect(), sc = r.width / VW;
       const wx = (mouseX - r.left) / sc + cam.x, wy = (mouseY - r.top) / sc + cam.y;
       aim = Math.atan2(wy - (p.y - 1), wx - p.x);
       fire = mouseDown; firePressed = mousePressed;
-    } else if (mx || my) aim = Math.atan2(my, mx);
+    }
+    // recién soltaste la palanca de apuntar: la mira se queda donde estaba (no salta a donde caminas)
+    else if (performance.now() - lastStickT < 1500) aim = lastStickAim;
+    else if (mx || my) aim = Math.atan2(my, mx);
     if (keys.Space) { fire = true; firePressed = firePressed || pressed.Space; }
   }
   const inp = {
