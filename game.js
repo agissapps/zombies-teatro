@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v10 · hordas que rodean';
+const VERSION = 'v11 · red estable';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -142,8 +142,8 @@ let isHost = true, myIdx = 0, netOn = false;
 let evQ = { fx: [], tr: [], bl: [] }, sndQ = [];
 const alive = p => p && !p.down && !p.dead && !p.left;
 function addFx(f) { G.fx.push(f); if (isHost && netOn && evQ.fx.length < 80) evQ.fx.push(f); }
-function addTr(t) { G.tracers.push(t); if (isHost && netOn) evQ.tr.push(t); }
-function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn) evQ.bl.push(b); }
+function addTr(t) { G.tracers.push(t); if (isHost && netOn && evQ.tr.length < 60) evQ.tr.push(t); }
+function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn && evQ.bl.length < 40) evQ.bl.push(b); }
 function newGame(list) {
   list = list || [{ name: myName(), ch: myChar }];
   G = {
@@ -1100,7 +1100,9 @@ const RIN = [];                    // última entrada de cada invitado (en el an
 let GOUT = {};                     // botones del invitado acumulados entre envíos
 let CID = '';
 try { CID = sessionStorage.getItem('fdm-cid') || ''; if (!CID) { CID = Math.random().toString(36).slice(2, 10); sessionStorage.setItem('fdm-cid', CID); } } catch (e) { CID = Math.random().toString(36).slice(2, 10); }
-const canStream = c => c && c.open && (!c.dataChannel || c.dataChannel.bufferedAmount < 64 * 1024);
+// igual que en la cocina: solo mandar si NO hay nada esperando en la fila (ni en PeerJS ni en el canal).
+// Si la red va lenta, mejor saltarse una foto que acumular fotos viejas (eso causaba el desfase).
+const canStream = c => c && c.open && (c.bufferSize || 0) === 0 && (!c.dataChannel || c.dataChannel.bufferedAmount < 8000);
 function send(c, m) { try { if (c && c.open) c.send(m); } catch (e) { } }
 function broadcast(m) { room.forEach(r => r.conn && send(r.conn, m)); }
 function setStatus(s) { $('status').textContent = s; }
@@ -1198,7 +1200,12 @@ function buildSnap() {
       bleed: r1(p.bleed), revT: r2(p.revT), guns: p.guns, cur: p.cur, relT: r2(p.relT), potions: p.potions, flash: r2(p.flash), knifeAnim: r2(p.knifeAnim),
       name: p.name, ch: p.ch, tp: p.tp, hurtT: r1(Math.min(p.hurtT, 9)), invT: r1(p.invT),
     })),
-    ev: evQ, snd: sndQ,
+    // efectos con números redondeados (fotos más ligeras = menos retraso)
+    ev: {
+      fx: evQ.fx.map(f => { const o = {}; for (const k in f) o[k] = typeof f[k] === 'number' ? Math.round(f[k] * 100) / 100 : f[k]; return o; }),
+      tr: evQ.tr.map(t => ({ x1: Math.round(t.x1), y1: Math.round(t.y1), x2: Math.round(t.x2), y2: Math.round(t.y2), l: t.l, c: t.c })),
+      bl: evQ.bl.map(b => ({ x: Math.round(b.x), y: Math.round(b.y), s: r1(b.s) })),
+    }, snd: sndQ,
   };
   evQ = { fx: [], tr: [], bl: [] }; sndQ = [];
   return s;
@@ -1221,7 +1228,7 @@ function joinRoom() {
 }
 function connectHost() {
   lastTry = performance.now();
-  const c = hostConn = peer.connect(NET_PREFIX + roomCode, { reliable: true });
+  const c = hostConn = peer.connect(NET_PREFIX + roomCode, { reliable: true, serialization: 'json' });
   c.on('open', () => { if (c !== hostConn) return; lastRx = performance.now(); lostSince = 0; send(c, { t: 'join', name: myName(), ch: myChar, cid: CID }); });
   c.on('data', m => { if (c !== hostConn) return; lastRx = performance.now(); lostSince = 0; guestOnData(m); });
 }
@@ -1272,7 +1279,7 @@ function applySnap(s) {
 function netTick(now) {
   if (!netOn) return;
   if (isHost) {
-    if ((phase === 'play') && now - lastSnap > 66) {
+    if ((phase === 'play') && now - lastSnap > 66 && room.some(r => canStream(r.conn))) {   // si nadie puede recibir, se guarda para la siguiente foto
       lastSnap = now; const s = buildSnap();
       room.forEach(r => { if (canStream(r.conn)) send(r.conn, s); });
     }
@@ -1289,8 +1296,15 @@ function netTick(now) {
   // sin noticias del anfitrión: reconectar
   if (now - lastRx > 4000) {
     if (!lostSince) lostSince = now;
-    if (now - lostSince > 30000) { leaveNet(false, 'Se perdió la conexión con el anfitrión'); return; }
-    if (now - lastTry > 3000 && peer && !peer.destroyed && peer.open) { try { hostConn && hostConn.close(); } catch (e) { } connectHost(); }
+    if (now - lostSince > 45000) { leaveNet(false, 'Se perdió la conexión con el anfitrión'); return; }
+    if (now - lastTry > 4000) {
+      lastTry = now;
+      try { hostConn && hostConn.close(); } catch (e) { } hostConn = null;
+      if (!peer || peer.destroyed) {                 // el teléfono mató la conexión: crear otra
+        const p = peer = newPeer(); p.on('open', () => { if (p === peer) connectHost(); }); p.on('error', () => { });
+      } else if (peer.disconnected) { try { peer.reconnect(); } catch (e) { } }   // al volver, el siguiente intento conecta
+      else if (peer.open) connectHost();
+    }
   }
 }
 function leaveNet(quiet, msg) {
