@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v11 · red estable';
+const VERSION = 'v12 · reconexión, arrancones y guía';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -140,11 +140,13 @@ let G = null, myChar = 0, phase = 'menu';
 // red: el anfitrión simula todo; los invitados mandan su posición y botones
 let isHost = true, myIdx = 0, netOn = false;
 let evQ = { fx: [], tr: [], bl: [] }, sndQ = [];
-const alive = p => p && !p.down && !p.dead && !p.left;
+// away = desconectado o sin responder: se queda quieto y los zombies lo ignoran hasta que vuelva
+const alive = p => p && !p.down && !p.dead && !p.left && !p.away;
 function addFx(f) { G.fx.push(f); if (isHost && netOn && evQ.fx.length < 80) evQ.fx.push(f); }
 function addTr(t) { G.tracers.push(t); if (isHost && netOn && evQ.tr.length < 60) evQ.tr.push(t); }
 function addBlood(b) { if (G.blood.length > 160) G.blood.shift(); G.blood.push(b); if (isHost && netOn && evQ.bl.length < 40) evQ.bl.push(b); }
 function newGame(list) {
+  for (const k in GUIDES) delete GUIDES[k];
   list = list || [{ name: myName(), ch: myChar }];
   G = {
     round: 0, state: 'break', breakT: 4, toSpawn: 0, spawnT: 0, power: false,
@@ -289,7 +291,7 @@ function spawnZombie() {
   let sp = 20 + Math.random() * 6;
   if (r >= 3 && roll < Math.min(.85, (r - 2) * .14)) sp = 38 + Math.random() * 8;
   if (r >= 6 && roll < Math.min(.45, (r - 5) * .08)) sp = 56 + Math.random() * 6;
-  G.zombies.push({ id: ++G.zid, x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r), sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
+  G.zombies.push({ id: ++G.zid, rush: Math.random() < .10 + Math.random() * .05, x: best.sx, y: best.sy, w: best, st: 'out', hp: zombieHp(r), sp, atk: 0, flash: 0, lost: 0, face: 1, anim: Math.random() * 10 });
   return true;
 }
 function updateZombies(dt) {
@@ -357,7 +359,9 @@ function updateZombies(dt) {
     }
     const d = Math.hypot(gx - z.x, gy - z.y) || 1;
     z.slowT = (z.slowT || 0) - dt;
-    const sp = (z.atk > .6 ? z.sp * .3 : z.sp) * (z.slowT > 0 ? .4 : 1);
+    // los "arrancones" (10-15%): al verte cerca aceleran de golpe para desestabilizarte
+    const rushing = z.rush && vis && td < 130 * 130 && td > 14 * 14;
+    const sp = (z.atk > .6 ? z.sp * .3 : z.sp) * (z.slowT > 0 ? .4 : 1) * (rushing ? 1.6 : 1);
     if (Math.sqrt(td) > 10) move(z, (gx - z.x) / d * sp, (gy - z.y) / d * sp, dt, zSolid, 4);
     z.face = gx < z.x ? -1 : 1;
     if (td < 13 * 13 && z.atk <= 0 && tp.invT <= 0) {
@@ -551,7 +555,7 @@ function action(p, pressed, dt) {
   }
 }
 function updatePlayer(p, inp, dt) {
-  if (p.dead || p.left) return;
+  if (p.dead || p.left || p.away) return;
   // invitado: su posición la manda su dispositivo (salvo justo después de un teletransporte)
   if (inp.pos && inp.tp === p.tp && !p.down) { p.x = inp.pos[0]; p.y = inp.pos[1]; p.mv = inp.mv; }
   if (p.down) {                     // en el suelo: solo apuntar y disparar
@@ -849,6 +853,43 @@ function text(s, x, y, c, size = 8, align = 'left') {
   ctx.font = size + "px 'Press Start 2P', monospace"; ctx.textAlign = align; ctx.textBaseline = 'top';
   ctx.fillStyle = '#000'; ctx.fillText(s, x + 1, y + 1); ctx.fillStyle = c; ctx.fillText(s, x, y);
 }
+// ---- línea guía hacia un compañero caído ----
+// Se calcula UNA vez (cuando cae), desde donde estabas tú; no se recalcula al moverte.
+// Cada quien ve solo su propia línea (se dibuja en su pantalla, no viaja por la red).
+const GUIDES = {};
+function guidePath(sx, sy, tx, ty) {
+  const s = idx(Math.floor(sx / TS), Math.floor(sy / TS)), t = idx(Math.floor(tx / TS), Math.floor(ty / TS));
+  const prev = new Int32Array(MW * MH).fill(-1), q = [s]; prev[s] = s;
+  for (let h = 0; h < q.length && prev[t] < 0; h++) {
+    const c = q[h], cx = c % MW, cy = (c / MW) | 0;
+    for (const [dx, dy] of N4) {
+      const nx = cx + dx, ny = cy + dy, j = idx(nx, ny);
+      if (!inb(nx, ny) || prev[j] >= 0 || tiles[j] !== FLOOR) continue;
+      prev[j] = c; q.push(j);
+    }
+  }
+  if (prev[t] < 0) return [[sx, sy], [tx, ty]];          // sin camino caminable (p. ej. por la trampilla): línea recta
+  const pts = [];
+  for (let c = t; ; c = prev[c]) { pts.push([(c % MW) * TS + 8, ((c / MW) | 0) * TS + 8]); if (c === s) break; }
+  pts.reverse(); pts[0] = [sx, sy]; pts[pts.length - 1] = [tx, ty];
+  // quitar puntos en línea recta para que el trazo sea limpio
+  return pts.filter((p, i) => i === 0 || i === pts.length - 1 || (pts[i - 1][0] - p[0]) * (pts[i + 1][1] - p[1]) !== (pts[i - 1][1] - p[1]) * (pts[i + 1][0] - p[0]));
+}
+function drawGuides(me) {
+  G.players.forEach((o, i) => {
+    const need = o !== me && o.down && !o.dead && alive(me);
+    if (!need) { delete GUIDES[i]; return; }
+    if (!GUIDES[i]) GUIDES[i] = guidePath(me.x, me.y, o.x, o.y);
+    const pts = GUIDES[i];
+    const path = () => { ctx.beginPath(); pts.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); };
+    ctx.save(); ctx.globalAlpha = .8; ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 4; ctx.setLineDash([]); path(); ctx.globalAlpha = .35; ctx.stroke();
+    ctx.globalAlpha = .85; ctx.strokeStyle = '#ffc93c'; ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]); ctx.lineDashOffset = -performance.now() / 60;   // puntos que avanzan hacia el caído
+    path(); ctx.stroke();
+    ctx.restore();
+  });
+}
 function render() {
   ctx.setTransform(S, 0, 0, S, 0, 0); ctx.imageSmoothingEnabled = false;
   r(0, 0, VW, VH, '#0b0810');
@@ -883,7 +924,7 @@ function render() {
   // entidades ordenadas por y
   const ents = [];
   G.zombies.forEach(z => ents.push([z.y, 'z', z]));
-  G.players.forEach((p, i) => { if (!p.dead && !p.left) ents.push([p.y, 'p', p, i]); });
+  G.players.forEach((p, i) => { if (!p.dead) ents.push([p.y, 'p', p, i]); });
   G.fx.forEach(f => { if (f.k === 'corpse') ents.push([f.y - 1, 'c', f]); });
   ents.sort((a, b) => a[0] - b[0]);
   for (const [, k, e] of ents) {
@@ -898,11 +939,13 @@ function render() {
       const X = Math.round(e.x), Y = Math.round(e.y), bob = e.mv ? Math.floor(performance.now() / 110) % 2 : 0;
       r(X - 5, Y + 5, 10, 2, 'rgba(0,0,0,.35)');
       const flip = Math.cos(e.aim) < 0, spr = SP['p' + e.ch];
-      if (e.down) { ctx.globalAlpha = .5; }
+      const ghost = e.left || e.away;
+      if (e.down || ghost) { ctx.globalAlpha = ghost ? .35 : .5; }
       ctx.save(); if (flip) { ctx.translate(X, 0); ctx.scale(-1, 1); ctx.drawImage(spr, -6, Y - 8 - bob); } else ctx.drawImage(spr, X - 6, Y - 8 - bob); ctx.restore();
       ctx.globalAlpha = 1;
       if (!e.down) drawGunInHand(e, X, Y - 1 - bob);
       text(e.name, X, Y - 17, CHARS[e.ch].c, 6, 'center');
+      if (ghost) text('RECONECTANDO…', X, Y - 25, '#8fd0ff', 6, 'center');
       if (e.down) {   // barra: verde = lo están reviviendo, roja = tiempo antes de desangrarse
         r(X - 9, Y - 23, 18, 3, '#000');
         if (e.revT > 0) r(X - 8, Y - 22, Math.round(16 * Math.min(1, e.revT / 3)), 1, '#4caf3a');
@@ -931,6 +974,7 @@ function render() {
     dctx.fillStyle = g; dctx.beginPath(); dctx.arc(sx, sy, R, 0, Math.PI * 2); dctx.fill();
   }
   ctx.drawImage(dark, 0, 0);
+  ctx.save(); ctx.translate(-cam.x, -cam.y); drawGuides(me); ctx.restore();   // la línea guía va encima de la oscuridad
   // compañeros caídos fuera de la pantalla: flecha roja en el borde
   for (const o of G.players) if (o !== me && o.down && !o.dead && !o.left) {
     const sx = o.x - cam.x, sy = o.y - cam.y;
@@ -969,7 +1013,7 @@ function drawHUD(p) {
   // compañeros (puntos y estado)
   if (!G.solo) G.players.forEach((o, i) => {
     if (o === p) return;
-    const st = o.left ? ' DESCON.' : o.dead ? ' FUERA' : o.down ? ' CAÍDO ' + Math.ceil(o.bleed) : '';
+    const st = o.left || o.away ? ' RECONECT.' : o.dead ? ' FUERA' : o.down ? ' CAÍDO ' + Math.ceil(o.bleed) : '';
     text(o.name + ' ' + o.pts + st, VW - 6, 17 + (i - (i > p.idx ? 1 : 0)) * 8, o.down ? '#ff6b6b' : o.dead || o.left ? '#888' : CHARS[o.ch].c, 6, 'right');
   });
   if (p.down) text('¡CAÍSTE! QUE TE REVIVAN · ' + Math.ceil(p.bleed), VW / 2, 50, '#ff6b6b', 6, 'center');
@@ -988,9 +1032,11 @@ function update(dt) {
   if (phase !== 'play' || !G) return;
   if (!isHost) { guestUpdate(dt); return; }
   for (const p of G.players) p._rev = false;
+  const now = performance.now();
+  G.players.forEach((p, i) => { p.away = netOn && i !== myIdx && !p.left && (!RIN[i] || now - RIN[i].at > 1500); });
   G.players.forEach((p, i) => updatePlayer(p, i === myIdx ? readInput(p) : takeRemote(i, p), dt));
   // caídos: si nadie los está reviviendo se desangran
-  for (const p of G.players) if (p.down && !p.dead && !p.left && !p._rev) {
+  for (const p of G.players) if (p.down && !p.dead && !p.left && !p.away && !p._rev) {   // desconectado: no se desangra
     p.revT = 0; p.bleed -= dt;
     if (p.bleed <= 0) { p.dead = true; p.down = false; sfx('hurt'); flash(p.name.toUpperCase() + ' SE DESANGRÓ'); }
   }
@@ -1009,7 +1055,7 @@ function update(dt) {
   G.drops = G.drops.filter(d => d.l > 0 && !d.taken);
   G.x2T -= dt; G.killT -= dt;
   commonTimers(dt);
-  if (!G.players.some(alive)) gameOver();
+  if (!G.players.some(p => alive(p) || (p.away && !p.dead))) gameOver();
 }
 function commonTimers(dt) {
   G.msgT -= dt;
@@ -1027,7 +1073,8 @@ function guestUpdate(dt) {
     GOUT.fp = GOUT.fp || inp.firePressed; GOUT.ap = GOUT.ap || inp.actPressed;
     GOUT.rl = GOUT.rl || !!inp.reload; GOUT.kn = GOUT.kn || !!inp.knife; GOUT.sw = GOUT.sw || !!inp.swap;
     if (alive(me) || me.down) me.aim = inp.aim;
-    if (alive(me)) {
+    // sin conexión con el anfitrión: tu personaje se queda quieto hasta reconectar
+    if (alive(me) && performance.now() - lastRx < 1500) {
       me.mv = !!(inp.mx || inp.my);
       const spd = hasPot(me, 'veloz') ? 88 : 70;
       if (me.mv) move(me, inp.mx * spd, inp.my * spd, dt, pSolid, 4);
@@ -1198,7 +1245,7 @@ function buildSnap() {
     pl: G.players.map(p => ({
       x: r1(p.x), y: r1(p.y), aim: r2(p.aim), mv: p.mv, hp: Math.ceil(p.hp), maxHp: p.maxHp, pts: p.pts, kills: p.kills, down: p.down, dead: p.dead, left: p.left,
       bleed: r1(p.bleed), revT: r2(p.revT), guns: p.guns, cur: p.cur, relT: r2(p.relT), potions: p.potions, flash: r2(p.flash), knifeAnim: r2(p.knifeAnim),
-      name: p.name, ch: p.ch, tp: p.tp, hurtT: r1(Math.min(p.hurtT, 9)), invT: r1(p.invT),
+      name: p.name, ch: p.ch, tp: p.tp, away: !!p.away, hurtT: r1(Math.min(p.hurtT, 9)), invT: r1(p.invT),
     })),
     // efectos con números redondeados (fotos más ligeras = menos retraso)
     ev: {
