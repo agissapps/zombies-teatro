@@ -1,6 +1,6 @@
 // Función de Medianoche — zombies cooperativo en pixel art (fase 1: un jugador)
 'use strict';
-const VERSION = 'v18 · mapa 2 y más zombies';
+const VERSION = 'v19 · Zairene con ventaja';
 document.getElementById('ver').textContent = VERSION;
 
 /* ============================ MAPA ============================ */
@@ -242,11 +242,14 @@ function newGame(list) {
   WINDOWS.forEach(w => { w.boards = 6; });
 }
 function newPlayer(ch, name) {
-  return {
+  const p = {
     ch, name: name || CHARS[ch].n, x: START.x, y: START.y, aim: 0, hp: 100, maxHp: 100, hurtT: 9, pts: 500, kills: 0, down: false,
     potions: [], invT: 0, idx: 0, tp: 0, bleed: 0, revT: 0, revBy: -1, dead: false, left: false,
     guns: [startPistol()], cur: 0, cool: 0, relT: 0, knifeT: 0, knifeAnim: 0, repT: 0, trapT: 0, flash: 0, mv: false, face: 1,
   };
+  // Zairene empieza con ventaja: 5000 puntos y la Soda Coraza (poción roja)
+  if (ch === 0) { p.pts = 5000; p.potions = ['coraza']; p.maxHp = 250; p.hp = 250; }
+  return p;
 }
 // pistola con la que empiezas: 8 en el cargador + 32 de reserva (al rellenar sube a 80)
 function startPistol() { const g = gun('pistola'); g.res = 32; return g; }
